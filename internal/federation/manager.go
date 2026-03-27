@@ -75,20 +75,16 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.mu.RLock()
 	for _, t := range m.transports {
 		transport := t
-		m.wg.Add(1)
-		go func() {
-			defer m.wg.Done()
+		m.wg.Go(func() {
 			if err := transport.Start(ctx, incoming); err != nil {
 				m.logger.Error("transport start failed", "transport", transport.Name(), "error", err)
 			}
-		}()
+		})
 	}
 	m.mu.RUnlock()
 
 	// Accept incoming peer connections
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
+	m.wg.Go(func() {
 		for {
 			select {
 			case <-ctx.Done():
@@ -97,21 +93,17 @@ func (m *Manager) Start(ctx context.Context) error {
 				m.handleIncomingPeer(ctx, conn)
 			}
 		}
-	}()
+	})
 
 	// Reconnect known peers
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
+	m.wg.Go(func() {
 		m.reconnectKnownPeers(ctx)
-	}()
+	})
 
 	// Start heartbeat loop
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
+	m.wg.Go(func() {
 		m.heartbeatLoop(ctx)
-	}()
+	})
 
 	return nil
 }
@@ -291,9 +283,7 @@ func (m *Manager) addPeerConn(ctx context.Context, peerID string, conn PeerConn,
 	m.mu.Unlock()
 
 	// Write loop
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
+	m.wg.Go(func() {
 		for {
 			select {
 			case <-ps.done:
@@ -308,12 +298,10 @@ func (m *Manager) addPeerConn(ctx context.Context, peerID string, conn PeerConn,
 				}
 			}
 		}
-	}()
+	})
 
 	// Read loop
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
+	m.wg.Go(func() {
 		for {
 			select {
 			case <-ps.done:
@@ -331,7 +319,7 @@ func (m *Manager) addPeerConn(ctx context.Context, peerID string, conn PeerConn,
 			}
 			m.handlePeerEnvelope(ctx, peerID, env)
 		}
-	}()
+	})
 }
 
 // ForwardMessage sends a message to a peer hub.
@@ -478,7 +466,7 @@ func (m *Manager) handlePeerEnvelope(ctx context.Context, peerID string, env *pr
 	}
 }
 
-func (m *Manager) handleHeartbeat(ctx context.Context, peerID string, env *protocol.PeerEnvelope) {
+func (m *Manager) handleHeartbeat(ctx context.Context, _ string, env *protocol.PeerEnvelope) {
 	m.sendHeartbeatResponse(ctx, nil, env.ID)
 }
 
