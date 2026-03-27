@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -512,11 +513,8 @@ FROM conversations WHERE 1=1`
 	// filter by participant in-memory
 	var result []*protocol.Conversation
 	for _, c := range convs {
-		for _, p := range c.Participants {
-			if p == filter.Participant {
-				result = append(result, c)
-				break
-			}
+		if slices.Contains(c.Participants, filter.Participant) {
+			result = append(result, c)
 		}
 	}
 	return result, nil
