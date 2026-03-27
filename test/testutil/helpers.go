@@ -100,3 +100,10 @@ func (c *CollectingNotifier) NotificationsOfType(agentID, notifType string) []co
 	}
 	return out
 }
+
+// Clear resets all captured notifications, useful between logical test phases.
+func (c *CollectingNotifier) Clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.notifications = make(map[string][]core.Notification)
+}
