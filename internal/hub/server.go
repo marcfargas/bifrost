@@ -58,6 +58,16 @@ func NewServer(cfg *config.Config) (*Server, error) {
 	}, nil
 }
 
+// SetPeerManager sets the peer manager used by peer.* RPC handlers.
+func (s *Server) SetPeerManager(pm PeerManager) {
+	s.handler.SetPeerManager(pm)
+}
+
+// Hub returns the underlying core.Hub for wiring federation or other components.
+func (s *Server) Hub() *core.Hub {
+	return s.hub
+}
+
 // Run starts the hub daemon. It blocks until a signal is received or ctx is
 // cancelled, then performs a clean shutdown.
 func (s *Server) Run(ctx context.Context) error {

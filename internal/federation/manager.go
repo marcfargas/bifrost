@@ -66,6 +66,15 @@ func (m *Manager) AddTransport(t Transport) {
 	m.transports = append(m.transports, t)
 }
 
+// Transports returns the registered transports (for inspection by the hub server).
+func (m *Manager) Transports() []Transport {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	cp := make([]Transport, len(m.transports))
+	copy(cp, m.transports)
+	return cp
+}
+
 // Start begins all registered transports and reconnects known peers.
 func (m *Manager) Start(ctx context.Context) error {
 	ctx, m.cancel = context.WithCancel(ctx)

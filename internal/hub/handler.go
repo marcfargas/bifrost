@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/marcfargas/bifrost/internal/transport"
 	"github.com/marcfargas/bifrost/pkg/core"
@@ -11,15 +12,34 @@ import (
 	"github.com/marcfargas/bifrost/pkg/store"
 )
 
+// PeerManager is the interface the handler uses for peer federation operations.
+// Implemented by internal/federation.Manager via an adapter set on the Server.
+type PeerManager interface {
+	// PeerNew generates a magic code and announces this hub on the DHT.
+	PeerNew(ctx context.Context) (string, error)
+	// PeerJoin connects to a peer via magic code and returns (peerID, error).
+	PeerJoin(ctx context.Context, code string) (string, error)
+	// ListPeers returns all known federation peers.
+	ListPeers(ctx context.Context) ([]*protocol.Peer, error)
+	// ListRemoteAgents returns agents from a specific peer hub.
+	ListRemoteAgents(ctx context.Context, peerHub string) ([]*protocol.Agent, error)
+}
+
 // Handler dispatches JSON-RPC 2.0 requests to the appropriate hub operation.
 type Handler struct {
 	hub     *core.Hub
 	connMgr *ConnManager
+	peers   PeerManager // nil if federation is not enabled
 }
 
 // NewHandler creates a Handler backed by the given Hub and ConnManager.
 func NewHandler(h *core.Hub, cm *ConnManager) *Handler {
 	return &Handler{hub: h, connMgr: cm}
+}
+
+// SetPeerManager sets the peer manager used by peer.* RPC handlers.
+func (h *Handler) SetPeerManager(pm PeerManager) {
+	h.peers = pm
 }
 
 // Handle dispatches req to the appropriate method handler and returns an
@@ -61,6 +81,12 @@ func (h *Handler) Handle(ctx context.Context, conn *transport.Conn, req *RPCRequ
 		return h.handleDNDStatus(ctx, req)
 	case "task.retrieve_attachment":
 		return h.handleRetrieveAttachment(ctx, req)
+	case "peer.new":
+		return h.handlePeerNew(ctx, req)
+	case "peer.join":
+		return h.handlePeerJoin(ctx, req)
+	case "peer.list":
+		return h.handlePeerList(ctx, req)
 	default:
 		return rpcError(req.ID, -32601, "method not found")
 	}
@@ -555,6 +581,75 @@ func rpcError(id any, code int, msg string) *RPCResponse {
 			Code:    code,
 			Message: msg,
 		},
+	}
+}
+
+// handlePeerNew generates a magic code for federation peering.
+func (h *Handler) handlePeerNew(ctx context.Context, req *RPCRequest) *RPCResponse {
+	if h.peers == nil {
+		return rpcError(req.ID, -32000, "federation is not enabled")
+	}
+
+	code, err := h.peers.PeerNew(ctx)
+	if err != nil {
+		return rpcError(req.ID, -32000, fmt.Sprintf("generate magic code: %v", err))
+	}
+
+	return &RPCResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result:  map[string]string{"code": code},
+	}
+}
+
+// handlePeerJoin connects to a peer hub using a magic code.
+func (h *Handler) handlePeerJoin(ctx context.Context, req *RPCRequest) *RPCResponse {
+	if h.peers == nil {
+		return rpcError(req.ID, -32000, "federation is not enabled")
+	}
+
+	var params struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return rpcError(req.ID, -32602, "invalid params: "+err.Error())
+	}
+	if params.Code == "" {
+		return rpcError(req.ID, -32602, "code is required")
+	}
+
+	peerID, err := h.peers.PeerJoin(ctx, params.Code)
+	if err != nil {
+		return rpcError(req.ID, -32000, fmt.Sprintf("join peer: %v", err))
+	}
+
+	agents, _ := h.peers.ListRemoteAgents(ctx, peerID)
+
+	return &RPCResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result: map[string]any{
+			"peer_id": peerID,
+			"agents":  agents,
+		},
+	}
+}
+
+// handlePeerList returns all known federation peers.
+func (h *Handler) handlePeerList(ctx context.Context, req *RPCRequest) *RPCResponse {
+	if h.peers == nil {
+		return rpcError(req.ID, -32000, "federation is not enabled")
+	}
+
+	peers, err := h.peers.ListPeers(ctx)
+	if err != nil {
+		return rpcError(req.ID, -32000, fmt.Sprintf("list peers: %v", err))
+	}
+
+	return &RPCResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result:  map[string]any{"peers": peers},
 	}
 }
 
