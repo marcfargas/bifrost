@@ -37,7 +37,7 @@ func TestDNDQueuesAndFlushes(t *testing.T) {
 	notifier.Clear()
 
 	// Send 3 normal-priority messages to the receiver.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		msg := &protocol.Message{
 			From:     sender.AgentID,
 			To:       receiver.AgentID,
