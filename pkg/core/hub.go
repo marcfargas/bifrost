@@ -24,20 +24,36 @@ type Notification struct {
 // agent registry, and message router. Transport layers attach themselves as
 // Notifiers; the Hub never imports transport packages.
 type Hub struct {
-	store     store.Store
-	mu        sync.RWMutex
-	notifiers []Notifier
-	agents    *AgentRegistry
-	messages  *MessageRouter
+	store       store.Store
+	mu          sync.RWMutex
+	notifiers   []Notifier
+	agents      *AgentRegistry
+	messages    *MessageRouter
+	tasks       *TaskManager
+	attachments *AttachmentManager
 }
 
-// NewHub creates a Hub backed by the given store and wires agent registry and
-// message router to it.
+// NewHub creates a Hub backed by the given store and wires agent registry,
+// message router, and task manager to it.
 func NewHub(s store.Store) *Hub {
 	h := &Hub{store: s}
 	h.agents = newAgentRegistry(s, h)
 	h.messages = newMessageRouter(s, h)
+	h.tasks = newTaskManager(s, h)
 	return h
+}
+
+// NewHubWithConfig creates a Hub that also wires an AttachmentManager backed
+// by dataDir with the given maxFileSize string (e.g. "10MB"). Pass "" for no
+// limit.
+func NewHubWithConfig(s store.Store, dataDir, maxFileSize string) (*Hub, error) {
+	h := NewHub(s)
+	am, err := NewAttachmentManager(s, dataDir, maxFileSize)
+	if err != nil {
+		return nil, err
+	}
+	h.attachments = am
+	return h, nil
 }
 
 // AddNotifier registers a transport-layer notifier. Safe to call concurrently.
@@ -84,6 +100,12 @@ func (h *Hub) Agents() *AgentRegistry { return h.agents }
 
 // Messages returns the message router.
 func (h *Hub) Messages() *MessageRouter { return h.messages }
+
+// Tasks returns the task manager.
+func (h *Hub) Tasks() *TaskManager { return h.tasks }
+
+// Attachments returns the attachment manager, or nil if not configured.
+func (h *Hub) Attachments() *AttachmentManager { return h.attachments }
 
 // Store returns the underlying store.
 func (h *Hub) Store() store.Store { return h.store }
