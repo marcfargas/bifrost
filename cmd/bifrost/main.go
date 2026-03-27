@@ -2,11 +2,24 @@
 package main
 
 import (
-	"fmt"
 	"os"
+
+	"github.com/spf13/cobra"
 )
 
+var rootCmd = &cobra.Command{
+	Use:   "bifrost",
+	Short: "Cross-agent communication hub for Claude Code",
+}
+
 func main() {
-	fmt.Fprintln(os.Stderr, "bifrost: not yet implemented")
-	os.Exit(1)
+	rootCmd.AddCommand(hubCmd)
+	rootCmd.AddCommand(shimCmd)
+	rootCmd.AddCommand(agentsCmd)
+	rootCmd.AddCommand(sendCmd)
+	rootCmd.AddCommand(versionCmd)
+
+	if err := rootCmd.Execute(); err != nil {
+		os.Exit(1)
+	}
 }
