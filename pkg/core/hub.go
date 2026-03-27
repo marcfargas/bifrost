@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/marcfargas/bifrost/pkg/protocol"
 	"github.com/marcfargas/bifrost/pkg/store"
@@ -24,15 +25,16 @@ type Notification struct {
 // agent registry, and message router. Transport layers attach themselves as
 // Notifiers; the Hub never imports transport packages.
 type Hub struct {
-	store       store.Store
-	mu          sync.RWMutex
-	notifiers   []Notifier
-	agents      *AgentRegistry
-	messages    *MessageRouter
-	tasks       *TaskManager
-	attachments *AttachmentManager
-	channels    *ChannelManager
-	dnd         *DNDManager
+	store         store.Store
+	mu            sync.RWMutex
+	notifiers     []Notifier
+	agents        *AgentRegistry
+	messages      *MessageRouter
+	tasks         *TaskManager
+	attachments   *AttachmentManager
+	channels      *ChannelManager
+	dnd           *DNDManager
+	conversations *ConversationManager
 }
 
 // NewHub creates a Hub backed by the given store and wires agent registry,
@@ -44,6 +46,7 @@ func NewHub(s store.Store) *Hub {
 	h.tasks = newTaskManager(s, h)
 	h.channels = newChannelManager(s, h)
 	h.dnd = newDNDManager(s, h, true)
+	h.conversations = newConversationManager(s, h, 10*time.Minute)
 	return h
 }
 
@@ -116,6 +119,9 @@ func (h *Hub) Channels() *ChannelManager { return h.channels }
 
 // DND returns the DND manager.
 func (h *Hub) DND() *DNDManager { return h.dnd }
+
+// Conversations returns the conversation manager.
+func (h *Hub) Conversations() *ConversationManager { return h.conversations }
 
 // Store returns the underlying store.
 func (h *Hub) Store() store.Store { return h.store }

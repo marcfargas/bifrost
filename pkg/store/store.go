@@ -87,6 +87,9 @@ type Store interface {
 	// ListConversations returns conversations matching the filter.
 	ListConversations(ctx context.Context, filter ConversationFilter) ([]*protocol.Conversation, error)
 
+	// UpdateConversation replaces the stored conversation with the provided value (full update).
+	UpdateConversation(ctx context.Context, conv *protocol.Conversation) error
+
 	// CloseConversation marks a conversation as closed with the given reason.
 	CloseConversation(ctx context.Context, conversationID string, reason protocol.ConversationCloseReason) error
 

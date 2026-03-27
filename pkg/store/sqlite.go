@@ -520,6 +520,23 @@ FROM conversations WHERE 1=1`
 	return result, nil
 }
 
+func (s *SQLiteStore) UpdateConversation(ctx context.Context, conv *protocol.Conversation) error {
+	parts, err := toJSON(conv.Participants)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `
+UPDATE conversations
+SET participants = ?, task_id = ?, last_activity = ?, closed = ?, closed_reason = ?
+WHERE conversation_id = ?`,
+		parts, conv.TaskID,
+		fmtTime(conv.LastActivity),
+		boolInt(conv.Closed), string(conv.ClosedReason),
+		conv.ConversationID,
+	)
+	return err
+}
+
 func (s *SQLiteStore) CloseConversation(ctx context.Context, conversationID string, reason protocol.ConversationCloseReason) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE conversations SET closed = 1, closed_reason = ? WHERE conversation_id = ?`,
