@@ -2,6 +2,7 @@ package detect
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,13 +95,9 @@ func readGoMod(path string) (string, bool) {
 func detectNodeCapabilities(pkg packageJSON) []string {
 	caps := []string{"node"}
 
-	allDeps := make(map[string]string)
-	for k, v := range pkg.Dependencies {
-		allDeps[k] = v
-	}
-	for k, v := range pkg.DevDependencies {
-		allDeps[k] = v
-	}
+	allDeps := make(map[string]string, len(pkg.Dependencies)+len(pkg.DevDependencies))
+	maps.Copy(allDeps, pkg.Dependencies)
+	maps.Copy(allDeps, pkg.DevDependencies)
 
 	known := map[string]string{
 		"typescript": "typescript",
