@@ -125,7 +125,7 @@ func (m *cliMux) rpcCall(ctx context.Context, method string, params any) (*hub.R
 	}
 }
 
-func (m *cliMux) readLoop(ctx context.Context) {
+func (m *cliMux) readLoop(_ context.Context) {
 	for {
 		var raw json.RawMessage
 		if err := m.conn.Receive(&raw); err != nil {
