@@ -96,16 +96,53 @@ func (r *MessageRouter) routeToTaskSubscribers(ctx context.Context, msg *protoco
 	return nil
 }
 
-// routeBroadcast delivers to all online agents.
-func (r *MessageRouter) routeBroadcast(_ context.Context, msg *protocol.Message) {
-	r.hub.NotifyAll(Notification{Type: "message.new", Payload: msg}, msg.From)
+// routeBroadcast delivers to all online agents, including remote agents on
+// peer hubs (forwarded once per peer hub via the federation forwarder).
+func (r *MessageRouter) routeBroadcast(ctx context.Context, msg *protocol.Message) {
+	agents, err := r.store.ListAgents(ctx, store.AgentFilter{Status: protocol.AgentStatusOnline})
+	if err != nil {
+		// Fall back to local-only broadcast on store error.
+		r.hub.NotifyAll(Notification{Type: "message.new", Payload: msg}, msg.From)
+		return
+	}
+
+	// Track which peer hubs have already received a forward for this broadcast.
+	peerForwarded := make(map[string]bool)
+
+	for _, a := range agents {
+		if a.AgentID == msg.From {
+			continue
+		}
+		if a.PeerHub != "" {
+			// Forward once per peer hub.
+			if !peerForwarded[a.PeerHub] {
+				peerForwarded[a.PeerHub] = true
+				if fed := r.hub.Federation(); fed != nil {
+					fed.ForwardMessage(ctx, a.PeerHub, msg) //nolint:errcheck
+				}
+			}
+		} else {
+			r.hub.NotifyAgent(a.AgentID, Notification{Type: "message.new", Payload: msg})
+		}
+	}
 }
 
 // routeToAgent resolves the recipient, checks DND, and either delivers or
-// queues the message.
+// queues the message. If the agent is on a peer hub, the message is forwarded
+// via the federation forwarder.
 func (r *MessageRouter) routeToAgent(ctx context.Context, msg *protocol.Message) error {
 	agent, err := r.hub.Agents().Resolve(ctx, msg.To)
 	if err != nil {
+		return err
+	}
+
+	// If the agent is on a peer hub, forward via federation instead of local delivery.
+	if agent.PeerHub != "" {
+		fed := r.hub.Federation()
+		if fed == nil {
+			return fmt.Errorf("agent %s is on peer hub %s but federation is not enabled", msg.To, agent.PeerHub)
+		}
+		_, err := fed.ForwardMessage(ctx, agent.PeerHub, msg)
 		return err
 	}
 

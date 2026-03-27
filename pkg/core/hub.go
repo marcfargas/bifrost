@@ -21,6 +21,22 @@ type Notification struct {
 	Payload any
 }
 
+// FederationForwarder is the interface the hub core uses to forward messages
+// to peer hubs. This avoids an import cycle with internal/federation.
+type FederationForwarder interface {
+	// ForwardMessage sends a message to a peer hub.
+	ForwardMessage(ctx context.Context, peerID string, msg *protocol.Message) (protocol.DeliveryStatus, error)
+
+	// ForwardTaskCreate sends a task creation to the assignee's peer hub.
+	ForwardTaskCreate(ctx context.Context, peerID string, task *protocol.Task, attachments []*protocol.PeerAttachmentData) error
+
+	// ForwardTaskUpdate sends a task update to a peer hub.
+	ForwardTaskUpdate(ctx context.Context, peerID string, task *protocol.Task) error
+
+	// BroadcastAgentStatus notifies all peers about an agent status change.
+	BroadcastAgentStatus(ctx context.Context, agentID string, status protocol.AgentStatus)
+}
+
 // Hub is the central orchestrator. It wires together the persistent store,
 // agent registry, and message router. Transport layers attach themselves as
 // Notifiers; the Hub never imports transport packages.
@@ -28,6 +44,7 @@ type Hub struct {
 	store         store.Store
 	mu            sync.RWMutex
 	notifiers     []Notifier
+	federation    FederationForwarder // nil if federation is disabled
 	agents        *AgentRegistry
 	messages      *MessageRouter
 	tasks         *TaskManager
@@ -61,6 +78,22 @@ func NewHubWithConfig(s store.Store, dataDir, maxFileSize string) (*Hub, error) 
 	}
 	h.attachments = am
 	return h, nil
+}
+
+// SetFederation sets the federation forwarder for cross-hub routing.
+// Safe to call concurrently.
+func (h *Hub) SetFederation(f FederationForwarder) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.federation = f
+}
+
+// Federation returns the federation forwarder (may be nil if federation is
+// not enabled).
+func (h *Hub) Federation() FederationForwarder {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.federation
 }
 
 // AddNotifier registers a transport-layer notifier. Safe to call concurrently.
