@@ -1,6 +1,9 @@
 package protocol
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // AgentStatus represents the current availability state of an agent.
 type AgentStatus string
@@ -132,4 +135,92 @@ type Attachment struct {
 	Size         int64     `json:"size"`
 	UploadedBy   string    `json:"uploaded_by"`
 	UploadedAt   time.Time `json:"uploaded_at"`
+}
+
+// PeerStatus represents the current connectivity state of a peer hub.
+type PeerStatus string
+
+const (
+	PeerStatusConnected    PeerStatus = "connected"
+	PeerStatusUnreachable  PeerStatus = "unreachable"
+	PeerStatusDisconnected PeerStatus = "disconnected"
+)
+
+// PeerTransport identifies the protocol used to reach a peer hub.
+type PeerTransport string
+
+const (
+	PeerTransportLibp2p PeerTransport = "libp2p"
+	PeerTransportMDNS   PeerTransport = "mdns"
+	PeerTransportDirect PeerTransport = "direct"
+)
+
+// Peer represents a remote Bifrost hub connected via federation.
+type Peer struct {
+	PeerID          string        `json:"peer_id"`
+	DisplayName     string        `json:"display_name,omitempty"`
+	Transport       PeerTransport `json:"transport"`
+	Address         string        `json:"address"`
+	Token           string        `json:"token,omitempty"`
+	Status          PeerStatus    `json:"status"`
+	LastSeen        time.Time     `json:"last_seen"`
+	ConnectedAt     time.Time     `json:"connected_at"`
+	FailCount       int           `json:"fail_count"`
+	ProtoVersion    string        `json:"proto_version"`
+}
+
+// PeerEnvelope is the top-level wrapper for all peer-to-peer protocol messages.
+type PeerEnvelope struct {
+	Method  string          `json:"method"`
+	ID      string          `json:"id"`
+	Version string          `json:"version"`
+	From    string          `json:"from"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+// PeerSyncAgentsPayload carries the list of agents a hub wishes to advertise.
+type PeerSyncAgentsPayload struct {
+	Agents []*Agent `json:"agents"`
+}
+
+// PeerMessagePayload wraps a single message for cross-hub delivery.
+type PeerMessagePayload struct {
+	Message *Message `json:"message"`
+}
+
+// PeerAttachmentData holds inline file content for a cross-hub task attachment.
+type PeerAttachmentData struct {
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	Data        []byte `json:"data"` // base64-encoded by json.Marshal
+}
+
+// PeerTaskCreatePayload carries a new task and optional inline attachments.
+type PeerTaskCreatePayload struct {
+	Task        *Task                 `json:"task"`
+	Attachments []*PeerAttachmentData `json:"attachments,omitempty"`
+}
+
+// PeerTaskUpdatePayload carries a full task state update.
+type PeerTaskUpdatePayload struct {
+	Task *Task `json:"task"`
+}
+
+// PeerAgentStatusPayload notifies a peer of an agent status change.
+type PeerAgentStatusPayload struct {
+	AgentID   string      `json:"agent_id"`
+	Status    AgentStatus `json:"status"`
+	DNDReason string      `json:"dnd_reason,omitempty"`
+}
+
+// PeerHeartbeatPayload is sent periodically to confirm liveness.
+type PeerHeartbeatPayload struct {
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// PeerResponse is the acknowledgement sent in reply to a peer envelope.
+type PeerResponse struct {
+	ID      string `json:"id"`
+	OK      bool   `json:"ok"`
+	Error   string `json:"error,omitempty"`
 }

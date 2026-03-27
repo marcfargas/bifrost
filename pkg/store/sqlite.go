@@ -148,6 +148,27 @@ CREATE TABLE IF NOT EXISTS message_queue (
     enqueued_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_message_queue_agent ON message_queue(agent_id, id);
+
+CREATE TABLE IF NOT EXISTS peers (
+    peer_id         TEXT PRIMARY KEY,
+    display_name    TEXT NOT NULL DEFAULT '',
+    transport       TEXT NOT NULL DEFAULT '',
+    address         TEXT NOT NULL DEFAULT '',
+    token           TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL DEFAULT 'disconnected',
+    last_seen       TEXT NOT NULL,
+    connected_at    TEXT NOT NULL,
+    fail_count      INTEGER NOT NULL DEFAULT 0,
+    proto_version   TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS peer_message_queue (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    peer_id     TEXT NOT NULL,
+    payload     TEXT NOT NULL,
+    enqueued_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_peer_message_queue_peer ON peer_message_queue(peer_id, id);
 `)
 	return err
 }
@@ -985,6 +1006,189 @@ func (s *SQLiteStore) QueuedMessageCount(ctx context.Context, recipientAgentID s
 	err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM message_queue WHERE agent_id = ?`, recipientAgentID).Scan(&count)
 	return count, err
+}
+
+// ---- Peers ------------------------------------------------------------------
+
+func (s *SQLiteStore) UpsertPeer(ctx context.Context, peer *protocol.Peer) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO peers
+    (peer_id, display_name, transport, address, token, status,
+     last_seen, connected_at, fail_count, proto_version)
+VALUES (?,?,?,?,?,?,?,?,?,?)
+ON CONFLICT(peer_id) DO UPDATE SET
+    display_name  = excluded.display_name,
+    transport     = excluded.transport,
+    address       = excluded.address,
+    token         = excluded.token,
+    status        = excluded.status,
+    last_seen     = excluded.last_seen,
+    connected_at  = excluded.connected_at,
+    fail_count    = excluded.fail_count,
+    proto_version = excluded.proto_version
+`,
+		peer.PeerID, peer.DisplayName, string(peer.Transport), peer.Address,
+		peer.Token, string(peer.Status), fmtTime(peer.LastSeen),
+		fmtTime(peer.ConnectedAt), peer.FailCount, peer.ProtoVersion,
+	)
+	return err
+}
+
+func (s *SQLiteStore) GetPeer(ctx context.Context, peerID string) (*protocol.Peer, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT peer_id, display_name, transport, address, token, status,
+       last_seen, connected_at, fail_count, proto_version
+FROM peers WHERE peer_id = ?`, peerID)
+	return scanPeer(row)
+}
+
+func (s *SQLiteStore) ListPeers(ctx context.Context) ([]*protocol.Peer, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT peer_id, display_name, transport, address, token, status,
+       last_seen, connected_at, fail_count, proto_version
+FROM peers ORDER BY connected_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanPeers(rows)
+}
+
+func (s *SQLiteStore) DeletePeer(ctx context.Context, peerID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM peers WHERE peer_id = ?`, peerID)
+	return err
+}
+
+func (s *SQLiteStore) UpdatePeerStatus(ctx context.Context, peerID string, status protocol.PeerStatus, failCount int) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE peers SET status = ?, fail_count = ?, last_seen = ? WHERE peer_id = ?`,
+		string(status), failCount, fmtTime(time.Now()), peerID)
+	return err
+}
+
+func (s *SQLiteStore) TouchPeer(ctx context.Context, peerID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE peers SET last_seen = ?, fail_count = 0 WHERE peer_id = ?`,
+		fmtTime(time.Now()), peerID)
+	return err
+}
+
+func scanPeer(row *sql.Row) (*protocol.Peer, error) {
+	var p protocol.Peer
+	var lastSeen, connectedAt string
+	err := row.Scan(
+		&p.PeerID, &p.DisplayName, &p.Transport, &p.Address, &p.Token,
+		&p.Status, &lastSeen, &connectedAt, &p.FailCount, &p.ProtoVersion,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if p.LastSeen, err = parseTime(lastSeen); err != nil {
+		return nil, err
+	}
+	if p.ConnectedAt, err = parseTime(connectedAt); err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+func scanPeers(rows *sql.Rows) ([]*protocol.Peer, error) {
+	var peers []*protocol.Peer
+	for rows.Next() {
+		var p protocol.Peer
+		var lastSeen, connectedAt string
+		if err := rows.Scan(
+			&p.PeerID, &p.DisplayName, &p.Transport, &p.Address, &p.Token,
+			&p.Status, &lastSeen, &connectedAt, &p.FailCount, &p.ProtoVersion,
+		); err != nil {
+			return nil, err
+		}
+		var err error
+		if p.LastSeen, err = parseTime(lastSeen); err != nil {
+			return nil, err
+		}
+		if p.ConnectedAt, err = parseTime(connectedAt); err != nil {
+			return nil, err
+		}
+		peers = append(peers, &p)
+	}
+	return peers, rows.Err()
+}
+
+// ---- Federation message queue -----------------------------------------------
+
+func (s *SQLiteStore) EnqueuePeerMessage(ctx context.Context, peerID string, env *protocol.PeerEnvelope) error {
+	payload, err := json.Marshal(env)
+	if err != nil {
+		return fmt.Errorf("store: marshal peer envelope: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx, `
+INSERT INTO peer_message_queue (peer_id, payload, enqueued_at)
+VALUES (?,?,?)`,
+		peerID, string(payload), fmtTime(time.Now()))
+	return err
+}
+
+func (s *SQLiteStore) DequeuePeerMessages(ctx context.Context, peerID string) ([]*protocol.PeerEnvelope, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	rows, err := tx.QueryContext(ctx, `
+SELECT id, payload FROM peer_message_queue
+WHERE peer_id = ?
+ORDER BY id ASC`, peerID)
+	if err != nil {
+		return nil, err
+	}
+
+	type qrow struct {
+		id      int64
+		payload string
+	}
+	var fetched []qrow
+	for rows.Next() {
+		var r qrow
+		if err = rows.Scan(&r.id, &r.payload); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		fetched = append(fetched, r)
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	var envs []*protocol.PeerEnvelope
+	for _, r := range fetched {
+		var env protocol.PeerEnvelope
+		if err = json.Unmarshal([]byte(r.payload), &env); err != nil {
+			return nil, fmt.Errorf("store: unmarshal peer envelope: %w", err)
+		}
+		envs = append(envs, &env)
+	}
+
+	if len(fetched) > 0 {
+		if _, err = tx.ExecContext(ctx,
+			`DELETE FROM peer_message_queue WHERE peer_id = ?`, peerID); err != nil {
+			return nil, err
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return envs, nil
 }
 
 // ---- utilities --------------------------------------------------------------

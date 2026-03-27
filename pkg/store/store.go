@@ -162,6 +162,35 @@ type Store interface {
 	// the recipient agent without removing them.
 	QueuedMessageCount(ctx context.Context, recipientAgentID string) (int, error)
 
+	// --- Peers ---
+
+	// UpsertPeer inserts or updates a peer record. Conflict on peer_id triggers update.
+	UpsertPeer(ctx context.Context, peer *protocol.Peer) error
+
+	// GetPeer retrieves a peer by ID. Returns nil, nil when not found.
+	GetPeer(ctx context.Context, peerID string) (*protocol.Peer, error)
+
+	// ListPeers returns all peers ordered by connected_at DESC.
+	ListPeers(ctx context.Context) ([]*protocol.Peer, error)
+
+	// DeletePeer removes a peer by ID.
+	DeletePeer(ctx context.Context, peerID string) error
+
+	// UpdatePeerStatus sets the status and fail_count of a peer and records last_seen.
+	UpdatePeerStatus(ctx context.Context, peerID string, status protocol.PeerStatus, failCount int) error
+
+	// TouchPeer updates last_seen to now and resets fail_count to 0 for the given peer.
+	TouchPeer(ctx context.Context, peerID string) error
+
+	// --- Federation message queue ---
+
+	// EnqueuePeerMessage adds a peer envelope to the outbound queue for a peer hub.
+	EnqueuePeerMessage(ctx context.Context, peerID string, env *protocol.PeerEnvelope) error
+
+	// DequeuePeerMessages atomically retrieves and deletes all queued envelopes for
+	// the given peer hub, returning them in enqueue order.
+	DequeuePeerMessages(ctx context.Context, peerID string) ([]*protocol.PeerEnvelope, error)
+
 	// --- Lifecycle ---
 
 	// Close releases any resources held by the store.
