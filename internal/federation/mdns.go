@@ -64,9 +64,7 @@ func (t *MDNSTransport) Start(ctx context.Context, incoming chan<- PeerConn) err
 	t.port = t.listener.Addr().(*net.TCPAddr).Port
 
 	// Accept incoming TCP connections.
-	t.wg.Add(1)
-	go func() {
-		defer t.wg.Done()
+	t.wg.Go(func() {
 		for {
 			conn, err := t.listener.Accept()
 			if err != nil {
@@ -81,21 +79,17 @@ func (t *MDNSTransport) Start(ctx context.Context, incoming chan<- PeerConn) err
 			peerConn := NewStreamPeerConn("mdns-"+conn.RemoteAddr().String(), conn)
 			incoming <- peerConn
 		}
-	}()
+	})
 
 	// Advertise this hub via mDNS.
-	t.wg.Add(1)
-	go func() {
-		defer t.wg.Done()
+	t.wg.Go(func() {
 		t.advertise(ctx)
-	}()
+	})
 
 	// Browse for other hubs.
-	t.wg.Add(1)
-	go func() {
-		defer t.wg.Done()
+	t.wg.Go(func() {
 		t.browse(ctx)
-	}()
+	})
 
 	t.logger.Info("mDNS transport started", "port", t.port, "hub_id", t.hubID)
 	return nil
