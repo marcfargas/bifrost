@@ -32,6 +32,7 @@ type Hub struct {
 	tasks       *TaskManager
 	attachments *AttachmentManager
 	channels    *ChannelManager
+	dnd         *DNDManager
 }
 
 // NewHub creates a Hub backed by the given store and wires agent registry,
@@ -42,6 +43,7 @@ func NewHub(s store.Store) *Hub {
 	h.messages = newMessageRouter(s, h)
 	h.tasks = newTaskManager(s, h)
 	h.channels = newChannelManager(s, h)
+	h.dnd = newDNDManager(s, h, true)
 	return h
 }
 
@@ -111,6 +113,9 @@ func (h *Hub) Attachments() *AttachmentManager { return h.attachments }
 
 // Channels returns the channel manager.
 func (h *Hub) Channels() *ChannelManager { return h.channels }
+
+// DND returns the DND manager.
+func (h *Hub) DND() *DNDManager { return h.dnd }
 
 // Store returns the underlying store.
 func (h *Hub) Store() store.Store { return h.store }

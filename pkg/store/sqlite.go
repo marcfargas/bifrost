@@ -963,6 +963,13 @@ ORDER BY id ASC`, recipientAgentID)
 	return msgs, nil
 }
 
+func (s *SQLiteStore) QueuedMessageCount(ctx context.Context, recipientAgentID string) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM message_queue WHERE agent_id = ?`, recipientAgentID).Scan(&count)
+	return count, err
+}
+
 // ---- utilities --------------------------------------------------------------
 
 func boolInt(b bool) int {

@@ -109,8 +109,8 @@ func (r *MessageRouter) routeToAgent(ctx context.Context, msg *protocol.Message)
 		return err
 	}
 
-	// DND check: queue unless urgent.
-	if agent.Status == protocol.AgentStatusDND && msg.Priority != protocol.PriorityUrgent {
+	// DND check: queue unless the DND manager says to deliver.
+	if r.hub.DND() != nil && r.hub.DND().ShouldQueue(agent, msg) {
 		if err := r.store.EnqueueMessage(ctx, agent.AgentID, msg); err != nil {
 			return fmt.Errorf("messages: enqueue (dnd): %w", err)
 		}

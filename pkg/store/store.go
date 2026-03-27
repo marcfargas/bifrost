@@ -155,6 +155,10 @@ type Store interface {
 	// the recipient agent, returning them in enqueue order.
 	DequeueMessages(ctx context.Context, recipientAgentID string) ([]*protocol.Message, error)
 
+	// QueuedMessageCount returns the number of messages currently queued for
+	// the recipient agent without removing them.
+	QueuedMessageCount(ctx context.Context, recipientAgentID string) (int, error)
+
 	// --- Lifecycle ---
 
 	// Close releases any resources held by the store.
