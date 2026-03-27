@@ -59,6 +59,8 @@ func (h *Handler) Handle(ctx context.Context, conn *transport.Conn, req *RPCRequ
 		return h.handleDNDSet(ctx, req)
 	case "dnd.status":
 		return h.handleDNDStatus(ctx, req)
+	case "task.retrieve_attachment":
+		return h.handleRetrieveAttachment(ctx, req)
 	default:
 		return rpcError(req.ID, -32601, "method not found")
 	}
@@ -554,4 +556,34 @@ func rpcError(id any, code int, msg string) *RPCResponse {
 			Message: msg,
 		},
 	}
+}
+
+// handleRetrieveAttachment copies an attachment file to the requested
+// destination directory and returns the resulting path.
+func (h *Handler) handleRetrieveAttachment(ctx context.Context, req *RPCRequest) *RPCResponse {
+	var params struct {
+		AttachmentID string `json:"attachment_id"`
+		DestDir      string `json:"dest_dir"`
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return rpcError(req.ID, -32602, "invalid params: "+err.Error())
+	}
+	if params.AttachmentID == "" {
+		return rpcError(req.ID, -32602, "attachment_id is required")
+	}
+	if params.DestDir == "" {
+		return rpcError(req.ID, -32602, "dest_dir is required")
+	}
+	if h.hub.Attachments() == nil {
+		return rpcError(req.ID, -32000, "attachment storage not configured")
+	}
+
+	destPath, err := h.hub.Attachments().Retrieve(ctx, params.AttachmentID, params.DestDir)
+	if err != nil {
+		return rpcError(req.ID, -32000, "retrieve attachment: "+err.Error())
+	}
+
+	return &RPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]string{
+		"path": destPath,
+	}}
 }
