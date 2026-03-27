@@ -92,7 +92,7 @@ func TestDeriveMagicCodeInvalid(t *testing.T) {
 
 func TestMagicCodeUniqueness(t *testing.T) {
 	seen := make(map[string]bool)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		mc, err := GenerateMagicCode()
 		if err != nil {
 			t.Fatal(err)

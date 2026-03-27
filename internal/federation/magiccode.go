@@ -81,9 +81,7 @@ func formatMagicCode(seed []byte) string {
 	segments = append(segments, MagicCodePrefix)
 	for i := 0; i < len(encoded); i += MagicCodeSegmentLen {
 		end := i + MagicCodeSegmentLen
-		if end > len(encoded) {
-			end = len(encoded)
-		}
+		end = min(end, len(encoded))
 		segments = append(segments, encoded[i:end])
 	}
 	return strings.Join(segments, "-")
