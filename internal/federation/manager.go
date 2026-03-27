@@ -152,11 +152,11 @@ func (m *Manager) handleIncomingPeer(ctx context.Context, conn PeerConn) {
 		return
 	}
 
-	if !protocol.CompatibleWith(env.Version) {
+	if err := protocol.CheckPeerVersion(env.Version); err != nil {
 		resp := &protocol.PeerResponse{
 			ID:    env.ID,
 			OK:    false,
-			Error: fmt.Sprintf("incompatible protocol version: local=%s remote=%s", protocol.ProtocolVersion, env.Version),
+			Error: err.Error(),
 		}
 		payload, _ := json.Marshal(resp)
 		conn.Send(ctx, &protocol.PeerEnvelope{
@@ -242,10 +242,9 @@ func (m *Manager) ConnectPeer(ctx context.Context, transport PeerTransport, addr
 		return "", fmt.Errorf("handshake receive: %w", err)
 	}
 
-	if !protocol.CompatibleWith(resp.Version) {
+	if err := protocol.CheckPeerVersion(resp.Version); err != nil {
 		conn.Close()
-		return "", fmt.Errorf("incompatible protocol version: local=%s remote=%s",
-			protocol.ProtocolVersion, resp.Version)
+		return "", err
 	}
 
 	// Register peer

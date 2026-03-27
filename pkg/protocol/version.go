@@ -38,3 +38,36 @@ func CompatibleWith(version string) bool {
 	}
 	return major == ProtocolMajor
 }
+
+// CheckPeerVersion validates that a peer's protocol version is compatible.
+// Returns an error with a clear message if incompatible.
+func CheckPeerVersion(remoteVersion string) error {
+	if remoteVersion == "" {
+		return fmt.Errorf("peer did not report protocol version")
+	}
+
+	var major int
+	_, err := fmt.Sscanf(remoteVersion, "%d.", &major)
+	if err != nil {
+		return fmt.Errorf("peer reported invalid protocol version: %q", remoteVersion)
+	}
+
+	if major != ProtocolMajor {
+		return &VersionMismatchError{
+			Local:  ProtocolVersion,
+			Remote: remoteVersion,
+		}
+	}
+
+	return nil
+}
+
+// VersionMismatchError is returned when a peer has an incompatible protocol version.
+type VersionMismatchError struct {
+	Local  string
+	Remote string
+}
+
+func (e *VersionMismatchError) Error() string {
+	return fmt.Sprintf("incompatible protocol version: local=%s remote=%s (major version must match)", e.Local, e.Remote)
+}
