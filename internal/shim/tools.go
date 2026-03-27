@@ -23,6 +23,7 @@ func registerTools(server *mcp.Server, mux *hubMux, agent *protocol.Agent, nw *n
 	registerSubscribe(server, mux, agent)
 	registerListChannels(server, mux)
 	registerDND(server, mux, agent, nw)
+	registerPeer(server, mux)
 }
 
 // registerListAgents registers the bifrost_list_agents tool.
@@ -512,6 +513,94 @@ func registerDND(server *mcp.Server, mux *hubMux, agent *protocol.Agent, nw *not
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: "DND mode disabled.\n" + resultJSON}},
 		}, nil, nil
+	})
+}
+
+// registerPeer registers the bifrost_peer tool.
+func registerPeer(server *mcp.Server, mux *hubMux) {
+	type peerArgs struct {
+		Action string `json:"action" jsonschema:"action to perform: 'new' to generate a magic code, 'join' to connect using a code"`
+		Code   string `json:"code,omitempty" jsonschema:"magic code (required for 'join' action)"`
+	}
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "bifrost_peer",
+		Description: "Manage federation peering. Use 'new' to generate a magic code, or 'join' with a code to connect to a remote hub.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args peerArgs) (*mcp.CallToolResult, any, error) {
+		switch args.Action {
+		case "new":
+			resp, err := mux.rpcCall(ctx, "peer.new", map[string]any{})
+			if err != nil {
+				return nil, nil, fmt.Errorf("hub call failed: %w", err)
+			}
+			if resp.Error != nil {
+				return errorResult(resp.Error.Message), nil, nil
+			}
+
+			data, jsonErr := json.Marshal(resp.Result)
+			if jsonErr != nil {
+				return errorResult("failed to marshal response"), nil, nil
+			}
+
+			var result struct {
+				Code string `json:"code"`
+			}
+			if jsonErr := json.Unmarshal(data, &result); jsonErr != nil {
+				return errorResult("failed to parse response"), nil, nil
+			}
+
+			msg := fmt.Sprintf("Magic code generated: %s\nShare this code with the other hub. They should run: bifrost peer join %s\nThe code expires in 24 hours.", result.Code, result.Code)
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{&mcp.TextContent{Text: msg}},
+			}, nil, nil
+
+		case "join":
+			if args.Code == "" {
+				return errorResult("'code' is required for join action"), nil, nil
+			}
+
+			resp, err := mux.rpcCall(ctx, "peer.join", map[string]any{"code": args.Code})
+			if err != nil {
+				return nil, nil, fmt.Errorf("hub call failed: %w", err)
+			}
+			if resp.Error != nil {
+				return errorResult(resp.Error.Message), nil, nil
+			}
+
+			data, jsonErr := json.Marshal(resp.Result)
+			if jsonErr != nil {
+				return errorResult("failed to marshal response"), nil, nil
+			}
+
+			var result struct {
+				PeerID string             `json:"peer_id"`
+				Agents []protocol.Agent   `json:"agents"`
+			}
+			if jsonErr := json.Unmarshal(data, &result); jsonErr != nil {
+				return errorResult("failed to parse response"), nil, nil
+			}
+
+			var sb strings.Builder
+			fmt.Fprintf(&sb, "Connected to peer hub: %s\n", result.PeerID)
+			fmt.Fprintf(&sb, "%d remote agents available.\n", len(result.Agents))
+			if len(result.Agents) > 0 {
+				sb.WriteString("Remote agents:\n")
+				for _, a := range result.Agents {
+					name := a.AgentID
+					if len(a.Aliases) > 0 {
+						name = a.Aliases[0]
+					}
+					fmt.Fprintf(&sb, "  - %s (%s)\n", name, a.Status)
+				}
+			}
+
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}},
+			}, nil, nil
+
+		default:
+			return errorResult(fmt.Sprintf("unknown action %q, must be 'new' or 'join'", args.Action)), nil, nil
+		}
 	})
 }
 
