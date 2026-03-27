@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -96,7 +97,7 @@ func (r *MessageRouter) routeToTaskSubscribers(ctx context.Context, msg *protoco
 }
 
 // routeBroadcast delivers to all online agents.
-func (r *MessageRouter) routeBroadcast(ctx context.Context, msg *protocol.Message) {
+func (r *MessageRouter) routeBroadcast(_ context.Context, msg *protocol.Message) {
 	r.hub.NotifyAll(Notification{Type: "message.new", Payload: msg}, msg.From)
 }
 
@@ -154,10 +155,8 @@ func (r *MessageRouter) getOrCreateConversation(ctx context.Context, msg *protoc
 		return nil, err
 	}
 	for _, c := range convs {
-		for _, p := range c.Participants {
-			if p == msg.To {
-				return c, nil
-			}
+		if slices.Contains(c.Participants, msg.To) {
+			return c, nil
 		}
 	}
 

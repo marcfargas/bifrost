@@ -17,7 +17,7 @@ type Notifier interface {
 // Notification carries an event type and arbitrary payload to an agent.
 type Notification struct {
 	Type    string
-	Payload interface{}
+	Payload any
 }
 
 // Hub is the central orchestrator. It wires together the persistent store,
@@ -67,7 +67,7 @@ func (h *Hub) NotifyAgent(agentID string, notif Notification) protocol.DeliveryS
 // NotifyAll delivers a notification to all online agents, optionally excluding
 // one (pass empty string to exclude nobody). Offline agents are silently skipped.
 func (h *Hub) NotifyAll(notif Notification, excludeAgentID string) {
-	agents, err := h.store.ListAgents(context.Background(), store.AgentFilter{Status: protocol.AgentStatusOnline})
+	agents, err := h.store.ListAgents(context.TODO(), store.AgentFilter{Status: protocol.AgentStatusOnline})
 	if err != nil {
 		return
 	}
