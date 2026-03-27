@@ -86,7 +86,7 @@ func TestQueueFlushSuccess(t *testing.T) {
 	ctx := context.Background()
 
 	// Enqueue 3 messages
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		msg := &protocol.Message{
 			ID:             fmt.Sprintf("m%d", i),
 			ConversationID: "c1",
@@ -122,7 +122,7 @@ func TestQueueFlushPartialFailure(t *testing.T) {
 	ctx := context.Background()
 
 	// Enqueue 3 messages
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		msg := &protocol.Message{
 			ID:             fmt.Sprintf("pf%d", i),
 			ConversationID: "c1",
@@ -194,7 +194,7 @@ func TestQueueDepth(t *testing.T) {
 	}
 
 	// Enqueue 2 messages
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		msg := &protocol.Message{
 			ID:             fmt.Sprintf("d%d", i),
 			ConversationID: "c1",
