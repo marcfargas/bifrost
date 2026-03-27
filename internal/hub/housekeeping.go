@@ -7,12 +7,11 @@ import (
 	"time"
 
 	"github.com/marcfargas/bifrost/internal/config"
-	"github.com/marcfargas/bifrost/pkg/protocol"
-	"github.com/marcfargas/bifrost/pkg/store"
+	"github.com/marcfargas/bifrost/pkg/core"
 )
 
 // runHousekeeping runs periodic maintenance tasks until ctx is cancelled.
-func runHousekeeping(ctx context.Context, cfg *config.Config, s store.Store) {
+func runHousekeeping(ctx context.Context, cfg *config.Config, h *core.Hub) {
 	interval := cfg.Hub.HousekeepingInterval.Duration
 	if interval <= 0 {
 		interval = 5 * time.Minute
@@ -26,30 +25,24 @@ func runHousekeeping(ctx context.Context, cfg *config.Config, s store.Store) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			doHousekeeping(ctx, cfg, s)
+			doHousekeeping(ctx, cfg, h)
 		}
 	}
 }
 
 // doHousekeeping performs one round of maintenance:
-//  1. Close stale conversations (inactive longer than ConversationsConfig.InactivityTimeout).
+//  1. Close stale conversations via ConversationManager.
 //  2. Prune old messages.
 //  3. Prune old completed/failed/rejected tasks.
 //  4. Prune old closed conversations.
 //  5. Prune old attachments and remove their files from disk.
-func doHousekeeping(ctx context.Context, cfg *config.Config, s store.Store) {
+func doHousekeeping(ctx context.Context, cfg *config.Config, h *core.Hub) {
 	now := time.Now()
+	s := h.Store()
 
 	// 1. Close stale conversations.
-	inactivityTimeout := cfg.Conversations.InactivityTimeout.Duration
-	if inactivityTimeout > 0 {
-		staleBefore := now.Add(-inactivityTimeout)
-		stale, err := s.ListStaleConversations(ctx, staleBefore)
-		if err == nil {
-			for _, conv := range stale {
-				_ = s.CloseConversation(ctx, conv.ConversationID, protocol.ConversationCloseReasonInactivity)
-			}
-		}
+	if cfg.Conversations.InactivityTimeout.Duration > 0 {
+		_, _ = h.Conversations().CloseStale(ctx)
 	}
 
 	// 2. Prune old messages.

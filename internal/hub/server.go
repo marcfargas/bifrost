@@ -42,7 +42,11 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("server: open store: %w", err)
 	}
 
-	h := core.NewHub(s)
+	maxFileSize := strconv.FormatInt(cfg.Storage.MaxFileSize, 10)
+	h, err := core.NewHubWithConfig(s, dataDir, maxFileSize)
+	if err != nil {
+		return nil, fmt.Errorf("server: create hub: %w", err)
+	}
 	cm := NewConnManager()
 	h.AddNotifier(cm)
 
@@ -76,7 +80,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// Start housekeeping goroutine.
 	s.wg.Go(func() {
-		runHousekeeping(runCtx, s.cfg, s.hub.Store())
+		runHousekeeping(runCtx, s.cfg, s.hub)
 	})
 
 	// Start accept loop goroutine.
