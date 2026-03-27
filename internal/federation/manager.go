@@ -645,10 +645,17 @@ func (m *Manager) handlePeerAgentStatus(ctx context.Context, peerID string, env 
 
 // syncAgentsWithPeer sends local agent list to a peer.
 func (m *Manager) syncAgentsWithPeer(ctx context.Context, peerID string) {
-	agents, err := m.store.ListAgents(ctx, store.AgentFilter{PeerHub: "local"})
+	allAgents, err := m.store.ListAgents(ctx, store.AgentFilter{})
 	if err != nil {
 		m.logger.Error("list local agents for sync", "error", err)
 		return
+	}
+	// Filter to local agents only (PeerHub == "" means the agent is local).
+	var agents []*protocol.Agent
+	for _, a := range allAgents {
+		if a.PeerHub == "" {
+			agents = append(agents, a)
+		}
 	}
 
 	payload, _ := json.Marshal(protocol.PeerSyncAgentsPayload{Agents: agents})
