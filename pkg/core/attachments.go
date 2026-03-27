@@ -186,8 +186,7 @@ func parseSize(s string) (int64, error) {
 	}
 
 	for _, m := range multipliers {
-		if strings.HasSuffix(upper, m.suffix) {
-			numStr := strings.TrimSuffix(upper, m.suffix)
+		if numStr, ok := strings.CutSuffix(upper, m.suffix); ok {
 			n, err := strconv.ParseInt(strings.TrimSpace(numStr), 10, 64)
 			if err != nil {
 				return 0, fmt.Errorf("invalid size %q: %w", s, err)

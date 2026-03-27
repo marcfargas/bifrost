@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -42,12 +43,7 @@ func isValidTransition(from, to protocol.TaskStatus) bool {
 	if !ok {
 		return false
 	}
-	for _, s := range allowed {
-		if s == to {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, to)
 }
 
 // CreateTask creates a new task from requester to assignee. It resolves the
