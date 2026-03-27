@@ -90,7 +90,7 @@ func (fp *federatedPair) startAndConnect(t *testing.T) {
 
 	// Poll until dtA has a real listener address
 	var addrA string
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		addrA = fp.dtA.Addr()
 		if addrA != "" && addrA != "127.0.0.1:0" {
 			break
