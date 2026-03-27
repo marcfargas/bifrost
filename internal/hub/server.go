@@ -75,18 +75,14 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	// Start housekeeping goroutine.
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
+	s.wg.Go(func() {
 		runHousekeeping(runCtx, s.cfg, s.hub.Store())
-	}()
+	})
 
 	// Start accept loop goroutine.
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
+	s.wg.Go(func() {
 		s.acceptLoop(runCtx)
-	}()
+	})
 
 	// Wait for SIGINT/SIGTERM or context cancellation.
 	sigCh := make(chan os.Signal, 1)

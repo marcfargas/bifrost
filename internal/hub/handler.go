@@ -154,8 +154,7 @@ func (h *Handler) handleSendMessage(ctx context.Context, req *RPCRequest) *RPCRe
 	}
 
 	if err := h.hub.Messages().Send(ctx, &msg); err != nil {
-		var notFound *core.AgentNotFoundError
-		if errors.As(err, &notFound) {
+		if notFound, ok := errors.AsType[*core.AgentNotFoundError](err); ok {
 			resp := rpcError(req.ID, -32001, err.Error())
 			resp.Error.Data = notFound.Available
 			return resp

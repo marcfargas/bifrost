@@ -8,6 +8,6 @@ import (
 )
 
 // newLocalListener returns a TCP-backed PipeListener on Windows.
-func newLocalListener(cfg *config.Config) (transport.Listener, error) {
+func newLocalListener(_ *config.Config) (transport.Listener, error) {
 	return transport.NewPipeListener()
 }
