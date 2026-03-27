@@ -88,9 +88,11 @@ func (r *AgentRegistry) Deregister(ctx context.Context, agentID string) error {
 	return nil
 }
 
-// Resolve looks up an agent by address. It strips the "agent:" prefix if
-// present, then tries an exact ID match, and finally a case-insensitive alias
-// match. Returns AgentNotFoundError when no match is found.
+// Resolve finds an agent by alias, agent_id, or returns an error with available agents.
+// Resolution order: exact agent_id match first, then case-insensitive alias match.
+// If a name matches exactly one agent (local or remote), that agent is returned.
+// If a name matches multiple agents, it is treated as ambiguous (aliases should
+// have been de-duplicated by recomputeAllAliases, but this handles edge cases).
 func (r *AgentRegistry) Resolve(ctx context.Context, address string) (*protocol.Agent, error) {
 	addr := strings.TrimPrefix(address, "agent:")
 
@@ -103,22 +105,39 @@ func (r *AgentRegistry) Resolve(ctx context.Context, address string) (*protocol.
 		return agent, nil
 	}
 
-	// Case-insensitive alias search.
+	// Case-insensitive alias search across all agents (local + remote).
 	all, err := r.store.ListAgents(ctx, store.AgentFilter{})
 	if err != nil {
 		return nil, fmt.Errorf("agents: list for resolve: %w", err)
 	}
 
 	lower := strings.ToLower(addr)
+	var localMatches []*protocol.Agent
+	var remoteMatches []*protocol.Agent
+
 	for _, a := range all {
 		for _, alias := range a.Aliases {
 			if strings.ToLower(alias) == lower {
-				return a, nil
+				if a.PeerHub == "" {
+					localMatches = append(localMatches, a)
+				} else {
+					remoteMatches = append(remoteMatches, a)
+				}
+				break
 			}
 		}
 	}
 
-	// Build available list for the error.
+	// Exactly one match total — return it.
+	totalMatches := len(localMatches) + len(remoteMatches)
+	if totalMatches == 1 {
+		if len(localMatches) == 1 {
+			return localMatches[0], nil
+		}
+		return remoteMatches[0], nil
+	}
+
+	// Build available list for the error (0 matches or ambiguous).
 	available := make([]string, 0, len(all))
 	for _, a := range all {
 		available = append(available, a.AgentID)
