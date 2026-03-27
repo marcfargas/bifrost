@@ -90,9 +90,7 @@ func (t *DirectTransport) Start(ctx context.Context, incoming chan<- PeerConn) e
 	t.listener = listener
 
 	// Accept loop
-	t.wg.Add(1)
-	go func() {
-		defer t.wg.Done()
+	t.wg.Go(func() {
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
@@ -101,13 +99,12 @@ func (t *DirectTransport) Start(ctx context.Context, incoming chan<- PeerConn) e
 					return
 				default:
 					t.logger.Error("direct accept error", "error", err)
-					// If listener was closed externally, stop looping.
 					return
 				}
 			}
 			go t.handleIncoming(ctx, conn)
 		}
-	}()
+	})
 
 	t.logger.Info("direct transport started", "listen", listener.Addr().String())
 	return nil
