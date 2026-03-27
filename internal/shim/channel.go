@@ -210,16 +210,21 @@ func listenHubNotifications(ctx context.Context, mux *hubMux, nw *notificationWr
 			}
 
 			var payload struct {
-				Type        string `json:"type"`
-				From        string `json:"from"`
-				Body        string `json:"body"`
+				Type         string `json:"type"`
+				From         string `json:"from"`
+				Body         string `json:"body"`
 				Conversation string `json:"conversation_id"`
-				Timestamp   string `json:"timestamp"`
-				AgentName   string `json:"agent_name"`
-				TaskID      string `json:"task_id"`
-				Title       string `json:"title"`
-				Description string `json:"description"`
-				MessageType string `json:"message_type"`
+				Timestamp    string `json:"timestamp"`
+				AgentName    string `json:"agent_name"`
+				TaskID       string `json:"task_id"`
+				Title        string `json:"title"`
+				Description  string `json:"description"`
+				MessageType  string `json:"message_type"`
+				Status       string `json:"status"`
+				Summary      string `json:"summary"`
+				Reason       string `json:"reason"`
+				Requester    string `json:"requester"`
+				Assignee     string `json:"assignee"`
 			}
 			if err := json.Unmarshal(data, &payload); err != nil {
 				log.Warn("unmarshal hub notification payload failed", "error", err)
@@ -263,6 +268,33 @@ func listenHubNotifications(ctx context.Context, mux *hubMux, nw *notificationWr
 				}
 				if payload.Description != "" {
 					cp.Meta["description"] = payload.Description
+				}
+				if payload.Requester != "" {
+					cp.Meta["requester"] = payload.Requester
+				}
+				if payload.Assignee != "" {
+					cp.Meta["assignee"] = payload.Assignee
+				}
+			case "task_update":
+				cp.Message = fmt.Sprintf("Task %s updated: status=%s", payload.TaskID, payload.Status)
+				cp.Meta["event"] = "task_update"
+				if payload.TaskID != "" {
+					cp.Meta["task_id"] = payload.TaskID
+				}
+				if payload.Status != "" {
+					cp.Meta["status"] = payload.Status
+				}
+				if payload.Title != "" {
+					cp.Meta["title"] = payload.Title
+				}
+				if payload.Summary != "" {
+					cp.Meta["summary"] = payload.Summary
+				}
+				if payload.Reason != "" {
+					cp.Meta["reason"] = payload.Reason
+				}
+				if payload.Assignee != "" {
+					cp.Meta["assignee"] = payload.Assignee
 				}
 			default:
 				cp.Message = string(data)

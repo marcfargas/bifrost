@@ -116,10 +116,11 @@ func Run(ctx context.Context, opts Options) error {
 		},
 	)
 
-	registerTools(server, mux, agent)
-
 	// 8. Set up notification writer (writes raw JSON-RPC to stdout).
 	nw := &notificationWriter{w: os.Stdout}
+
+	globalDND.interval = 5 * time.Minute
+	registerTools(server, mux, agent, nw)
 
 	// 9. Start listening for hub notifications in background.
 	notifCtx, notifCancel := context.WithCancel(ctx)
