@@ -45,7 +45,7 @@ func TestAgentIDFromDifferentInputs(t *testing.T) {
 func TestNewShortIDUnique(t *testing.T) {
 	const iterations = 1000
 	seen := make(map[string]struct{}, iterations)
-	for i := 0; i < iterations; i++ {
+	for i := range iterations {
 		id := NewShortID()
 		if len(id) != 8 {
 			t.Fatalf("NewShortID returned %d chars, want 8", len(id))
@@ -66,7 +66,7 @@ func TestNewShortIDUnique(t *testing.T) {
 func TestNewIDUnique(t *testing.T) {
 	const iterations = 1000
 	seen := make(map[string]struct{}, iterations)
-	for i := 0; i < iterations; i++ {
+	for i := range iterations {
 		id := NewID()
 		if len(id) != 16 {
 			t.Fatalf("NewID returned %d chars, want 16", len(id))
