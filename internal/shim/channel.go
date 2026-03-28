@@ -183,8 +183,7 @@ func (nw *notificationWriter) writeNotification(method string, params any) error
 // channelNotificationParams represents the params of a
 // notifications/claude/channel notification.
 type channelNotificationParams struct {
-	Channel string            `json:"channel"`
-	Message string            `json:"message"`
+	Content string            `json:"content"`
 	Meta    map[string]string `json:"meta,omitempty"`
 }
 
@@ -221,8 +220,7 @@ func listenHubNotifications(ctx context.Context, mux *hubMux, nw *notificationWr
 			}
 
 			cp := channelNotificationParams{
-				Channel: "bifrost",
-				Meta:    make(map[string]string),
+				Meta: make(map[string]string),
 			}
 
 			switch envelope.Type {
@@ -232,7 +230,7 @@ func listenHubNotifications(ctx context.Context, mux *hubMux, nw *notificationWr
 					log.Warn("unmarshal message payload failed", "error", err)
 					continue
 				}
-				cp.Message = msg.Body
+				cp.Content = msg.Body
 				cp.Meta["from"] = msg.From
 				cp.Meta["type"] = string(msg.Type)
 				cp.Meta["conversation"] = msg.ConversationID
@@ -253,7 +251,7 @@ func listenHubNotifications(ctx context.Context, mux *hubMux, nw *notificationWr
 				if agent.DisplayName != "" {
 					name = agent.DisplayName
 				}
-				cp.Message = fmt.Sprintf("Agent %s has joined", name)
+				cp.Content = fmt.Sprintf("Agent %s has joined", name)
 				cp.Meta["agent"] = name
 				cp.Meta["event"] = "agent_joined"
 			case "agent.deregistered":
@@ -262,7 +260,7 @@ func listenHubNotifications(ctx context.Context, mux *hubMux, nw *notificationWr
 					log.Warn("unmarshal agent.deregistered payload failed", "error", err)
 					continue
 				}
-				cp.Message = fmt.Sprintf("Agent %s has left", info["agent_id"])
+				cp.Content = fmt.Sprintf("Agent %s has left", info["agent_id"])
 				cp.Meta["agent"] = info["agent_id"]
 				cp.Meta["event"] = "agent_left"
 			case "task_requested":
@@ -271,7 +269,7 @@ func listenHubNotifications(ctx context.Context, mux *hubMux, nw *notificationWr
 					log.Warn("unmarshal task_requested payload failed", "error", err)
 					continue
 				}
-				cp.Message = fmt.Sprintf("Task requested: %s\n%s", task.Title, task.Description)
+				cp.Content = fmt.Sprintf("Task requested: %s\n%s", task.Title, task.Description)
 				cp.Meta["event"] = "task_requested"
 				cp.Meta["task_id"] = task.TaskID
 				cp.Meta["title"] = task.Title
@@ -283,7 +281,7 @@ func listenHubNotifications(ctx context.Context, mux *hubMux, nw *notificationWr
 					log.Warn("unmarshal task_updated payload failed", "error", err)
 					continue
 				}
-				cp.Message = fmt.Sprintf("Task %s updated: status=%s", task.TaskID, task.Status)
+				cp.Content = fmt.Sprintf("Task %s updated: status=%s", task.TaskID, task.Status)
 				cp.Meta["event"] = "task_updated"
 				cp.Meta["task_id"] = task.TaskID
 				cp.Meta["status"] = string(task.Status)
@@ -303,17 +301,17 @@ func listenHubNotifications(ctx context.Context, mux *hubMux, nw *notificationWr
 					log.Warn("unmarshal ping payload failed", "error", err)
 					continue
 				}
-				cp.Message = info["message"]
+				cp.Content = info["message"]
 				cp.Meta["event"] = "ping"
 				if hub, ok := info["hub"]; ok {
 					cp.Meta["hub"] = hub
 				}
 			default:
-				cp.Message = string(data)
+				cp.Content = string(data)
 				cp.Meta["event"] = envelope.Type
 			}
 
-			log.Info("emitting channel notification", "type", envelope.Type, "message_preview", cp.Message[:min(len(cp.Message), 50)])
+			log.Info("emitting channel notification", "type", envelope.Type, "message_preview", cp.Content[:min(len(cp.Content), 50)])
 			if err := nw.writeNotification("notifications/claude/channel", cp); err != nil {
 				log.Warn("failed to write channel notification", "error", err)
 			} else {

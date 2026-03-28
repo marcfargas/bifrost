@@ -110,8 +110,7 @@ func (d *dndState) sendReminder(ctx context.Context, mux *hubMux, agentID string
 // to the MCP client via the notificationWriter.
 func emitRawChannelNotification(nw *notificationWriter, meta map[string]string, content string) {
 	params := channelNotificationParams{
-		Channel: "bifrost",
-		Message: content,
+		Content: content,
 		Meta:    meta,
 	}
 	if err := nw.writeNotification("notifications/claude/channel", params); err != nil {

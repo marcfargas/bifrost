@@ -86,11 +86,8 @@ func TestEmitRawChannelNotification(t *testing.T) {
 
 	_, cp := parseChannelNotification(t, buf.Bytes())
 
-	if cp.Channel != "bifrost" {
-		t.Errorf("channel: got %q, want %q", cp.Channel, "bifrost")
-	}
-	if cp.Message != "You have 3 queued message(s)" {
-		t.Errorf("message: got %q", cp.Message)
+	if cp.Content != "You have 3 queued message(s)" {
+		t.Errorf("message: got %q", cp.Content)
 	}
 	if cp.Meta["event"] != "dnd_reminder" {
 		t.Errorf("meta.event: got %q", cp.Meta["event"])

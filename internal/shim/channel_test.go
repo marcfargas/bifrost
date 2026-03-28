@@ -127,8 +127,8 @@ func TestNotificationWriter_WriteNotification(t *testing.T) {
 	nw, buf := testNotificationWriter()
 
 	params := channelNotificationParams{
-		Channel: "bifrost",
-		Message: "hello",
+
+		Content: "hello",
 		Meta:    map[string]string{"event": "test"},
 	}
 
@@ -179,11 +179,8 @@ func TestListenHubNotifications_MessageNew(t *testing.T) {
 	data := runListenAndCapture(t, notif)
 	_, cp := parseChannelNotification(t, data)
 
-	if cp.Channel != "bifrost" {
-		t.Errorf("channel: got %q, want %q", cp.Channel, "bifrost")
-	}
-	if cp.Message != "Hello from A" {
-		t.Errorf("message: got %q, want %q", cp.Message, "Hello from A")
+	if cp.Content != "Hello from A" {
+		t.Errorf("message: got %q, want %q", cp.Content, "Hello from A")
 	}
 	if cp.Meta["from"] != "agent-a" {
 		t.Errorf("meta.from: got %q, want %q", cp.Meta["from"], "agent-a")
@@ -221,8 +218,8 @@ func TestListenHubNotifications_Ping(t *testing.T) {
 	data := runListenAndCapture(t, notif)
 	_, cp := parseChannelNotification(t, data)
 
-	if cp.Message != "PONG! Welcome to bifrost" {
-		t.Errorf("message: got %q, want %q", cp.Message, "PONG! Welcome to bifrost")
+	if cp.Content != "PONG! Welcome to bifrost" {
+		t.Errorf("message: got %q, want %q", cp.Content, "PONG! Welcome to bifrost")
 	}
 	if cp.Meta["event"] != "ping" {
 		t.Errorf("meta.event: got %q, want %q", cp.Meta["event"], "ping")
@@ -249,8 +246,8 @@ func TestListenHubNotifications_AgentRegistered(t *testing.T) {
 	data := runListenAndCapture(t, notif)
 	_, cp := parseChannelNotification(t, data)
 
-	if cp.Message != "Agent Marc@my-project has joined" {
-		t.Errorf("message: got %q, want %q", cp.Message, "Agent Marc@my-project has joined")
+	if cp.Content != "Agent Marc@my-project has joined" {
+		t.Errorf("message: got %q, want %q", cp.Content, "Agent Marc@my-project has joined")
 	}
 	if cp.Meta["agent"] != "Marc@my-project" {
 		t.Errorf("meta.agent: got %q, want %q", cp.Meta["agent"], "Marc@my-project")
@@ -277,8 +274,8 @@ func TestListenHubNotifications_AgentRegistered_FallbackProjectName(t *testing.T
 	data := runListenAndCapture(t, notif)
 	_, cp := parseChannelNotification(t, data)
 
-	if cp.Message != "Agent fallback-project has joined" {
-		t.Errorf("message: got %q, want %q", cp.Message, "Agent fallback-project has joined")
+	if cp.Content != "Agent fallback-project has joined" {
+		t.Errorf("message: got %q, want %q", cp.Content, "Agent fallback-project has joined")
 	}
 }
 
@@ -297,8 +294,8 @@ func TestListenHubNotifications_AgentDeregistered(t *testing.T) {
 	data := runListenAndCapture(t, notif)
 	_, cp := parseChannelNotification(t, data)
 
-	if cp.Message != "Agent agent-gone has left" {
-		t.Errorf("message: got %q, want %q", cp.Message, "Agent agent-gone has left")
+	if cp.Content != "Agent agent-gone has left" {
+		t.Errorf("message: got %q, want %q", cp.Content, "Agent agent-gone has left")
 	}
 	if cp.Meta["agent"] != "agent-gone" {
 		t.Errorf("meta.agent: got %q, want %q", cp.Meta["agent"], "agent-gone")
@@ -328,8 +325,8 @@ func TestListenHubNotifications_TaskRequested(t *testing.T) {
 	_, cp := parseChannelNotification(t, data)
 
 	expected := fmt.Sprintf("Task requested: %s\n%s", "Fix the bug", "There is a bug in X")
-	if cp.Message != expected {
-		t.Errorf("message: got %q, want %q", cp.Message, expected)
+	if cp.Content != expected {
+		t.Errorf("message: got %q, want %q", cp.Content, expected)
 	}
 	if cp.Meta["event"] != "task_requested" {
 		t.Errorf("meta.event: got %q, want %q", cp.Meta["event"], "task_requested")
@@ -369,8 +366,8 @@ func TestListenHubNotifications_TaskUpdated(t *testing.T) {
 	_, cp := parseChannelNotification(t, data)
 
 	expected := "Task task-2 updated: status=completed"
-	if cp.Message != expected {
-		t.Errorf("message: got %q, want %q", cp.Message, expected)
+	if cp.Content != expected {
+		t.Errorf("message: got %q, want %q", cp.Content, expected)
 	}
 	if cp.Meta["event"] != "task_updated" {
 		t.Errorf("meta.event: got %q", cp.Meta["event"])
@@ -412,7 +409,7 @@ func TestListenHubNotifications_UnknownType(t *testing.T) {
 		t.Errorf("meta.event: got %q, want %q", cp.Meta["event"], "some.future.event")
 	}
 	// Message should be the raw JSON of the full params (not just payload).
-	if cp.Message == "" {
+	if cp.Content == "" {
 		t.Error("expected non-empty message for unknown type")
 	}
 }
