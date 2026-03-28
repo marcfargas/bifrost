@@ -194,8 +194,10 @@ func (m *Manager) handleIncomingPeer(ctx context.Context, conn PeerConn) {
 	// Initial agent sync
 	m.syncAgentsWithPeer(ctx, peerID)
 
-	// Flush queued messages
-	m.flushPeerQueue(ctx, peerID)
+	// Batch-sync all pending conversations.
+	if syncErr := m.hub.Sync().BatchSyncForPeer(ctx, peerID); syncErr != nil {
+		m.logger.Warn("batch sync for reconnected peer failed", "peer_id", peerID, "error", syncErr)
+	}
 }
 
 // ConnectPeer initiates a connection to a peer via any available transport.
@@ -264,8 +266,10 @@ func (m *Manager) ConnectPeer(ctx context.Context, transport PeerTransport, addr
 	// Initial agent sync
 	m.syncAgentsWithPeer(ctx, peerID)
 
-	// Flush queued messages
-	m.flushPeerQueue(ctx, peerID)
+	// Batch-sync all pending conversations.
+	if syncErr := m.hub.Sync().BatchSyncForPeer(ctx, peerID); syncErr != nil {
+		m.logger.Warn("batch sync for reconnected peer failed", "peer_id", peerID, "error", syncErr)
+	}
 
 	return peerID, nil
 }
@@ -318,8 +322,10 @@ func (m *Manager) ConnectViaPeerConn(ctx context.Context, conn PeerConn, transpo
 	// Initial agent sync
 	m.syncAgentsWithPeer(ctx, peerID)
 
-	// Flush queued messages
-	m.flushPeerQueue(ctx, peerID)
+	// Batch-sync all pending conversations.
+	if syncErr := m.hub.Sync().BatchSyncForPeer(ctx, peerID); syncErr != nil {
+		m.logger.Warn("batch sync for reconnected peer failed", "peer_id", peerID, "error", syncErr)
+	}
 
 	return peerID, nil
 }
@@ -384,79 +390,35 @@ func (m *Manager) addPeerConn(ctx context.Context, peerID string, conn PeerConn,
 	})
 }
 
-// ForwardMessage sends a message to a peer hub.
-// Called by the hub core when the recipient agent is on a remote hub.
-func (m *Manager) ForwardMessage(ctx context.Context, peerID string, msg *protocol.Message) (protocol.DeliveryStatus, error) {
-	payload, err := json.Marshal(protocol.PeerMessagePayload{Message: msg})
-	if err != nil {
-		return "", fmt.Errorf("marshal message: %w", err)
+// SyncConversation implements core.ConversationSyncer.
+// It sends a peer.conversation_sync envelope to the target peer hub.
+func (m *Manager) SyncConversation(ctx context.Context, peerID string, conv *protocol.Conversation, events []*protocol.Event) error {
+	meta := protocol.ConvMeta{
+		ID:           conv.ConversationID,
+		Participants: conv.Participants,
+		IsTask:       conv.IsTask,
+		Title:        conv.Title,
+		Assignee:     conv.Assignee,
+		Requester:    conv.Requester,
+		CreatedAt:    conv.CreatedAt,
 	}
-
-	env := &protocol.PeerEnvelope{
-		Method:  "peer.message",
-		ID:      protocol.NewShortID(),
-		Version: protocol.ProtocolVersion,
-		From:    m.localPeerID,
-		Payload: payload,
-	}
-
-	if err := m.sendToPeer(ctx, peerID, env); err != nil {
-		// Queue for later delivery
-		m.store.EnqueuePeerMessage(ctx, peerID, env)
-		m.logger.Info("message queued for peer (unreachable)",
-			"peer_id", peerID, "from", msg.From, "to", msg.To)
-		return protocol.DeliveryStatusQueuedUnreachable, nil
-	}
-
-	m.logger.Info("message forwarded to peer",
-		"peer_id", peerID, "from", msg.From, "to", msg.To)
-	return protocol.DeliveryStatusDelivered, nil
-}
-
-// ForwardTaskCreate sends a task creation to the assignee's peer hub.
-func (m *Manager) ForwardTaskCreate(ctx context.Context, peerID string, task *protocol.Task, attachments []*protocol.PeerAttachmentData) error {
-	payload, err := json.Marshal(protocol.PeerTaskCreatePayload{
-		Task:        task,
-		Attachments: attachments,
+	payload, err := json.Marshal(protocol.PeerConversationSyncPayload{
+		Conversation: meta,
+		Events:       events,
 	})
 	if err != nil {
-		return fmt.Errorf("marshal task create: %w", err)
+		return fmt.Errorf("marshal conversation_sync: %w", err)
 	}
 
 	env := &protocol.PeerEnvelope{
-		Method:  "peer.task_create",
+		Method:  "peer.conversation_sync",
 		ID:      protocol.NewShortID(),
 		Version: protocol.ProtocolVersion,
 		From:    m.localPeerID,
 		Payload: payload,
 	}
 
-	if err := m.sendToPeer(ctx, peerID, env); err != nil {
-		m.store.EnqueuePeerMessage(ctx, peerID, env)
-		return fmt.Errorf("task create queued (hub unreachable): %w", err)
-	}
-	return nil
-}
-
-// ForwardTaskUpdate sends a task status update to relevant peer hubs.
-func (m *Manager) ForwardTaskUpdate(ctx context.Context, peerID string, task *protocol.Task) error {
-	payload, err := json.Marshal(protocol.PeerTaskUpdatePayload{Task: task})
-	if err != nil {
-		return fmt.Errorf("marshal task update: %w", err)
-	}
-
-	env := &protocol.PeerEnvelope{
-		Method:  "peer.task_update",
-		ID:      protocol.NewShortID(),
-		Version: protocol.ProtocolVersion,
-		From:    m.localPeerID,
-		Payload: payload,
-	}
-
-	if err := m.sendToPeer(ctx, peerID, env); err != nil {
-		m.store.EnqueuePeerMessage(ctx, peerID, env)
-	}
-	return nil
+	return m.sendToPeer(ctx, peerID, env)
 }
 
 // BroadcastAgentStatus notifies all peers about an agent status change.
@@ -519,12 +481,10 @@ func (m *Manager) handlePeerEnvelope(ctx context.Context, peerID string, env *pr
 		m.handleHeartbeat(ctx, peerID, env)
 	case "peer.sync_agents":
 		m.handleSyncAgents(ctx, peerID, env)
-	case "peer.message":
-		m.handlePeerMessage(ctx, peerID, env)
-	case "peer.task_create":
-		m.handlePeerTaskCreate(ctx, peerID, env)
-	case "peer.task_update":
-		m.handlePeerTaskUpdate(ctx, peerID, env)
+	case "peer.conversation_sync":
+		m.handleConversationSync(ctx, peerID, env)
+	case "peer.conversation_sync_ack":
+		m.handleConversationSyncAck(ctx, peerID, env)
 	case "peer.agent_status":
 		m.handlePeerAgentStatus(ctx, peerID, env)
 	default:
@@ -581,103 +541,83 @@ func (m *Manager) handleSyncAgents(ctx context.Context, peerID string, env *prot
 	m.logger.Info("synced agents from peer", "peer_id", peerID, "count", len(payload.Agents))
 }
 
-func (m *Manager) handlePeerMessage(ctx context.Context, peerID string, env *protocol.PeerEnvelope) {
-	var payload protocol.PeerMessagePayload
+func (m *Manager) handleConversationSync(ctx context.Context, peerID string, env *protocol.PeerEnvelope) {
+	var payload protocol.PeerConversationSyncPayload
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
-		m.logger.Error("invalid message payload", "peer_id", peerID, "error", err)
+		m.logger.Error("invalid conversation_sync payload", "peer_id", peerID, "error", err)
 		return
 	}
 
-	msg := payload.Message
-
-	// Save the message
-	m.store.SaveMessage(ctx, msg)
-
-	// Deliver to local agent
-	agent, err := m.hub.Agents().Resolve(ctx, msg.To)
+	// Upsert the conversation locally.
+	existing, err := m.store.GetConversation(ctx, payload.Conversation.ID)
 	if err != nil {
-		m.logger.Error("cannot resolve recipient for peer message", "to", msg.To, "error", err)
+		m.logger.Error("get conversation for sync", "error", err)
 		return
 	}
 
-	if agent.PeerHub != "" {
-		// Recipient is on another peer hub, not local — this should not happen in normal routing
-		m.logger.Warn("peer message for non-local agent", "to", msg.To, "peer_hub", agent.PeerHub)
-		return
+	conv := &protocol.Conversation{
+		ConversationID: payload.Conversation.ID,
+		Participants:   payload.Conversation.Participants,
+		IsTask:         payload.Conversation.IsTask,
+		Title:          payload.Conversation.Title,
+		Assignee:       payload.Conversation.Assignee,
+		Requester:      payload.Conversation.Requester,
+		CreatedAt:      payload.Conversation.CreatedAt,
 	}
 
-	// Check DND
-	if agent.Status == protocol.AgentStatusDND {
-		if msg.Priority != protocol.PriorityUrgent {
-			m.store.EnqueueMessage(ctx, agent.AgentID, msg)
+	if existing == nil {
+		if err := m.store.SaveConversation(ctx, conv); err != nil {
+			m.logger.Error("save synced conversation", "error", err)
 			return
 		}
-	}
-
-	status := m.hub.NotifyAgent(agent.AgentID, core.Notification{
-		Type:    "message.new",
-		Payload: msg,
-	})
-	if status == protocol.DeliveryStatusQueuedOffline {
-		m.store.EnqueueMessage(ctx, agent.AgentID, msg)
-	}
-}
-
-func (m *Manager) handlePeerTaskCreate(ctx context.Context, peerID string, env *protocol.PeerEnvelope) {
-	var payload protocol.PeerTaskCreatePayload
-	if err := json.Unmarshal(env.Payload, &payload); err != nil {
-		m.logger.Error("invalid task_create payload", "peer_id", peerID, "error", err)
-		return
-	}
-
-	task := payload.Task
-
-	// Save task locally (this hub becomes source of truth for the assignee)
-	if err := m.store.SaveTask(ctx, task); err != nil {
-		m.logger.Error("save federated task", "task_id", task.TaskID, "error", err)
-		return
-	}
-
-	// Auto-subscribe requester (remote) and assignee (local) to task channel
-	m.store.Subscribe(ctx, task.Requester, "task:"+task.TaskID)
-	m.store.Subscribe(ctx, task.Assignee, "task:"+task.TaskID)
-
-	// Notify the local assignee
-	m.hub.NotifyAgent(task.Assignee, core.Notification{
-		Type:    "task_requested",
-		Payload: task,
-	})
-}
-
-func (m *Manager) handlePeerTaskUpdate(ctx context.Context, peerID string, env *protocol.PeerEnvelope) {
-	var payload protocol.PeerTaskUpdatePayload
-	if err := json.Unmarshal(env.Payload, &payload); err != nil {
-		m.logger.Error("invalid task_update payload", "peer_id", peerID, "error", err)
-		return
-	}
-
-	task := payload.Task
-
-	// Update local task record
-	if err := m.store.UpdateTask(ctx, task); err != nil {
-		m.logger.Error("update federated task", "task_id", task.TaskID, "error", err)
-		return
-	}
-
-	// Notify all local subscribers of the task
-	subs, err := m.store.GetSubscribers(ctx, "task:"+task.TaskID)
-	if err != nil {
-		return
-	}
-	for _, agentID := range subs {
-		agent, err := m.store.GetAgent(ctx, agentID)
-		if err != nil || agent == nil || agent.PeerHub != "" {
-			continue // skip remote agents, their hub handles notification
+		// Init delivery_state for all local participants.
+		if err := m.store.InitDeliveryTargets(ctx, conv); err != nil {
+			m.logger.Error("init delivery targets for synced conversation", "error", err)
 		}
-		m.hub.NotifyAgent(agentID, core.Notification{
-			Type:    "task_update",
-			Payload: task,
-		})
+	}
+
+	// Append new events (ignore duplicates via primary key constraint).
+	var lastID string
+	for _, ev := range payload.Events {
+		ev.ConversationID = conv.ConversationID
+		if appendErr := m.store.AppendEvent(ctx, ev); appendErr != nil {
+			// Likely a duplicate — log debug and continue.
+			m.logger.Debug("append synced event (may be dup)", "event_id", ev.ID, "error", appendErr)
+		}
+		lastID = ev.ID
+	}
+
+	// Nudge local sync engine to deliver to local agents.
+	if lastID != "" {
+		m.hub.Sync().Nudge(conv.ConversationID)
+	}
+
+	// Send ack.
+	ackPayload, _ := json.Marshal(protocol.PeerConversationSyncAck{
+		ConversationID: conv.ConversationID,
+		LastEventID:    lastID,
+	})
+	ack := &protocol.PeerEnvelope{
+		Method:  "peer.conversation_sync_ack",
+		ID:      env.ID,
+		Version: protocol.ProtocolVersion,
+		From:    m.localPeerID,
+		Payload: ackPayload,
+	}
+	m.sendToPeer(ctx, peerID, ack) //nolint:errcheck
+}
+
+func (m *Manager) handleConversationSyncAck(ctx context.Context, peerID string, env *protocol.PeerEnvelope) {
+	var ack protocol.PeerConversationSyncAck
+	if err := json.Unmarshal(env.Payload, &ack); err != nil {
+		m.logger.Warn("invalid conversation_sync_ack", "peer_id", peerID, "error", err)
+		return
+	}
+	if ack.LastEventID == "" {
+		return
+	}
+	if err := m.store.SetDeliveryMark(ctx, "peer", peerID, ack.ConversationID, ack.LastEventID); err != nil {
+		m.logger.Warn("set delivery mark from ack", "peer_id", peerID, "error", err)
 	}
 }
 
@@ -725,28 +665,6 @@ func (m *Manager) syncAgentsWithPeer(ctx context.Context, peerID string) {
 	}
 
 	m.sendToPeer(ctx, peerID, env)
-}
-
-// flushPeerQueue sends all queued messages to a now-connected peer.
-func (m *Manager) flushPeerQueue(ctx context.Context, peerID string) {
-	envelopes, err := m.store.DequeuePeerMessages(ctx, peerID)
-	if err != nil {
-		m.logger.Error("dequeue peer messages", "peer_id", peerID, "error", err)
-		return
-	}
-
-	for _, env := range envelopes {
-		if err := m.sendToPeer(ctx, peerID, env); err != nil {
-			// Re-enqueue if sending fails
-			m.store.EnqueuePeerMessage(ctx, peerID, env)
-			m.logger.Warn("re-enqueued peer message after flush failure", "peer_id", peerID)
-			break
-		}
-	}
-
-	if len(envelopes) > 0 {
-		m.logger.Info("flushed queued messages to peer", "peer_id", peerID, "count", len(envelopes))
-	}
 }
 
 // handlePeerDisconnect marks a peer as disconnected and its agents as unreachable.

@@ -57,18 +57,9 @@ func (r *MessageRouter) Send(ctx context.Context, msg *protocol.Message) error {
 	}
 	msg.ConversationID = conv.ConversationID
 
-	// If the recipient is on a peer hub, route via federation regardless of SyncEngine.
-	agent, resolveErr := r.hub.Agents().Resolve(ctx, msg.To)
-	if resolveErr == nil && agent.PeerHub != "" {
-		fed := r.hub.Federation()
-		if fed == nil {
-			return fmt.Errorf("agent %s is on peer hub %s but federation is not enabled", msg.To, agent.PeerHub)
-		}
-		_, err := fed.ForwardMessage(ctx, agent.PeerHub, msg)
-		return err
-	}
-
 	// Use SyncEngine if available: create an Event and append it.
+	// The SyncEngine handles delivery to both local agents and peer hubs via
+	// delivery_state and ConversationSyncer.
 	if eng := r.hub.Sync(); eng != nil {
 		ev := &protocol.Event{
 			ConversationID: conv.ConversationID,
@@ -124,8 +115,9 @@ func (r *MessageRouter) routeToTaskSubscribers(ctx context.Context, msg *protoco
 	return nil
 }
 
-// routeBroadcast delivers to all online agents, including remote agents on
-// peer hubs (forwarded once per peer hub via the federation forwarder).
+// routeBroadcast delivers to all online local agents.
+// Remote (peer hub) agents receive broadcasts via the sync engine's
+// conversation delivery path when the conversation is set up with peer targets.
 func (r *MessageRouter) routeBroadcast(ctx context.Context, msg *protocol.Message) {
 	agents, err := r.store.ListAgents(ctx, store.AgentFilter{Status: protocol.AgentStatusOnline})
 	if err != nil {
@@ -134,44 +126,28 @@ func (r *MessageRouter) routeBroadcast(ctx context.Context, msg *protocol.Messag
 		return
 	}
 
-	// Track which peer hubs have already received a forward for this broadcast.
-	peerForwarded := make(map[string]bool)
-
 	for _, a := range agents {
 		if a.AgentID == msg.From {
 			continue
 		}
-		if a.PeerHub != "" {
-			// Forward once per peer hub.
-			if !peerForwarded[a.PeerHub] {
-				peerForwarded[a.PeerHub] = true
-				if fed := r.hub.Federation(); fed != nil {
-					fed.ForwardMessage(ctx, a.PeerHub, msg) //nolint:errcheck
-				}
-			}
-		} else {
+		if a.PeerHub == "" {
 			r.hub.NotifyAgent(a.AgentID, Notification{Type: "message.new", Payload: msg})
 		}
 	}
 }
 
 // routeToAgent resolves the recipient, checks DND, and either delivers or
-// queues the message. If the agent is on a peer hub, the message is forwarded
-// via the federation forwarder.
+// queues the message. Remote agents (PeerHub != "") are delivered via the
+// SyncEngine's peer delivery path and are skipped here.
 func (r *MessageRouter) routeToAgent(ctx context.Context, msg *protocol.Message) error {
 	agent, err := r.hub.Agents().Resolve(ctx, msg.To)
 	if err != nil {
 		return err
 	}
 
-	// If the agent is on a peer hub, forward via federation instead of local delivery.
+	// Remote agents are handled by the SyncEngine via peer delivery targets.
 	if agent.PeerHub != "" {
-		fed := r.hub.Federation()
-		if fed == nil {
-			return fmt.Errorf("agent %s is on peer hub %s but federation is not enabled", msg.To, agent.PeerHub)
-		}
-		_, err := fed.ForwardMessage(ctx, agent.PeerHub, msg)
-		return err
+		return nil
 	}
 
 	// DND check: queue unless the DND manager says to deliver.

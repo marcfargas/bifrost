@@ -7,38 +7,16 @@ import (
 	"time"
 
 	"github.com/marcfargas/bifrost/pkg/protocol"
+	"github.com/marcfargas/bifrost/pkg/store"
 )
 
 // mockFederation implements FederationForwarder for testing.
 type mockFederation struct {
 	mu               sync.Mutex
-	forwardedMsgs    []*protocol.Message
-	forwardedTasks   []*protocol.Task
 	statusBroadcasts []struct {
 		AgentID string
 		Status  protocol.AgentStatus
 	}
-}
-
-func (m *mockFederation) ForwardMessage(_ context.Context, _ string, msg *protocol.Message) (protocol.DeliveryStatus, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.forwardedMsgs = append(m.forwardedMsgs, msg)
-	return protocol.DeliveryStatusDelivered, nil
-}
-
-func (m *mockFederation) ForwardTaskCreate(_ context.Context, _ string, task *protocol.Task, _ []*protocol.PeerAttachmentData) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.forwardedTasks = append(m.forwardedTasks, task)
-	return nil
-}
-
-func (m *mockFederation) ForwardTaskUpdate(_ context.Context, _ string, task *protocol.Task) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.forwardedTasks = append(m.forwardedTasks, task)
-	return nil
 }
 
 func (m *mockFederation) BroadcastAgentStatus(_ context.Context, agentID string, status protocol.AgentStatus) {
@@ -91,7 +69,8 @@ func TestMessageRouteToRemoteAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Send message from local to remote.
+	// Send message from local to remote — goes through SyncEngine which routes
+	// to the peer hub via ConversationSyncer. The send itself must not error.
 	msg := &protocol.Message{
 		From: "local-1",
 		To:   "remote-1",
@@ -102,19 +81,20 @@ func TestMessageRouteToRemoteAgent(t *testing.T) {
 		t.Fatalf("send: %v", err)
 	}
 
-	// Verify federation forwarder was called.
-	fed.mu.Lock()
-	defer fed.mu.Unlock()
-	if len(fed.forwardedMsgs) != 1 {
-		t.Errorf("expected 1 forwarded message, got %d", len(fed.forwardedMsgs))
-	} else if fed.forwardedMsgs[0].Body != "What's the API schema?" {
-		t.Errorf("unexpected body: %s", fed.forwardedMsgs[0].Body)
+	// Verify a conversation was created with both participants.
+	convs, err := hub.Store().ListConversations(ctx, store.ConversationFilter{Participant: "local-1"})
+	if err != nil {
+		t.Fatalf("list conversations: %v", err)
+	}
+	if len(convs) == 0 {
+		t.Fatal("expected a conversation to be created")
 	}
 }
 
 func TestMessageRouteToRemoteAgentNoFederation(t *testing.T) {
 	hub := newTestHub(t)
-	// Federation is NOT set.
+	// Federation is NOT set — but the SyncEngine handles peer delivery, so
+	// sending to a remote agent should succeed (SyncEngine will retry on peer connect).
 
 	ctx := context.Background()
 	now := time.Now()
@@ -141,9 +121,9 @@ func TestMessageRouteToRemoteAgentNoFederation(t *testing.T) {
 		Type: protocol.MessageTypeContext,
 		Body: "test",
 	}
-	err := hub.Messages().Send(ctx, msg)
-	if err == nil {
-		t.Error("expected error when federation is not enabled")
+	// Now succeeds — delivery is deferred to sync engine, not immediate federation call.
+	if err := hub.Messages().Send(ctx, msg); err != nil {
+		t.Errorf("unexpected error sending to remote agent without active federation: %v", err)
 	}
 }
 
@@ -177,7 +157,7 @@ func TestAgentRegisterBroadcastsToFederation(t *testing.T) {
 	}
 }
 
-func TestBroadcastIncludesRemoteAgentPeerHubs(t *testing.T) {
+func TestBroadcastSkipsRemoteAgents(t *testing.T) {
 	hub := newTestHub(t)
 	fed := &mockFederation{}
 	hub.SetFederation(fed)
@@ -229,10 +209,12 @@ func TestBroadcastIncludesRemoteAgentPeerHubs(t *testing.T) {
 		t.Fatalf("send: %v", err)
 	}
 
-	// Federation should have received exactly one forwarded message (for peer-bob).
+	// Broadcast no longer directly forwards to peer hubs — the SyncEngine handles
+	// peer delivery via conversation events. BroadcastAgentStatus is only for agent
+	// status changes, not messages.
 	fed.mu.Lock()
 	defer fed.mu.Unlock()
-	if len(fed.forwardedMsgs) != 1 {
-		t.Errorf("expected 1 forwarded broadcast, got %d", len(fed.forwardedMsgs))
+	if len(fed.statusBroadcasts) != 0 {
+		t.Errorf("expected no status broadcasts from message send, got %d", len(fed.statusBroadcasts))
 	}
 }

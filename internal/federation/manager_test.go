@@ -108,7 +108,7 @@ func newTestManager(t *testing.T) (*Manager, store.Store) {
 	return mgr, s
 }
 
-func TestManagerForwardMessage(t *testing.T) {
+func TestManagerSyncConversation(t *testing.T) {
 	mgr, s := newTestManager(t)
 	ctx := context.Background()
 
@@ -122,68 +122,56 @@ func TestManagerForwardMessage(t *testing.T) {
 	s.UpsertPeer(ctx, peer)
 	mgr.addPeerConn(ctx, "peer-remote", conn, peer)
 
-	msg := &protocol.Message{
-		ID: "m1", ConversationID: "c1", From: "local-agent",
-		To: "remote-agent", Type: protocol.MessageTypeQuestion,
-		Body: "hello remote", Priority: protocol.PriorityNormal,
-		Timestamp: time.Now(),
+	conv := &protocol.Conversation{
+		ConversationID: "conv-1",
+		Participants:   []string{"local-agent", "remote-agent"},
+		CreatedAt:      time.Now(),
+	}
+	events := []*protocol.Event{
+		{
+			ID:             "ev-1",
+			ConversationID: "conv-1",
+			Type:           protocol.EventTypeMessage,
+			FromAgent:      "local-agent",
+			Timestamp:      time.Now(),
+			Data:           protocol.EventData{Body: "hello remote"},
+		},
 	}
 
-	status, err := mgr.ForwardMessage(ctx, "peer-remote", msg)
+	err := mgr.SyncConversation(ctx, "peer-remote", conv, events)
 	if err != nil {
-		t.Fatalf("forward: %v", err)
-	}
-	if status != protocol.DeliveryStatusDelivered {
-		t.Errorf("expected delivered, got %s", status)
+		t.Fatalf("SyncConversation: %v", err)
 	}
 
-	// Give the write loop a moment to pick up the message from sendCh
+	// Give the write loop a moment to pick up the envelope from sendCh
 	time.Sleep(50 * time.Millisecond)
 
-	// Verify envelope was sent (check sendCh was used via mock's sendBuf)
+	// Verify envelope was sent with the new method name
 	sent := conn.Sent()
 	if len(sent) == 0 {
 		t.Fatal("no envelopes sent")
 	}
-	if sent[0].Method != "peer.message" {
-		t.Errorf("expected peer.message, got %s", sent[0].Method)
+	if sent[0].Method != "peer.conversation_sync" {
+		t.Errorf("expected peer.conversation_sync, got %s", sent[0].Method)
 	}
 }
 
-func TestManagerForwardMessageQueuedWhenDisconnected(t *testing.T) {
-	mgr, s := newTestManager(t)
+func TestManagerSyncConversationFailsWhenDisconnected(t *testing.T) {
+	mgr, _ := newTestManager(t)
 	ctx := context.Background()
 
-	// Peer exists in store but is not connected
-	peer := &protocol.Peer{
-		PeerID: "peer-away", Status: protocol.PeerStatusDisconnected,
-		LastSeen: time.Now(), ConnectedAt: time.Now(),
-		ProtoVersion: protocol.ProtocolVersion,
+	conv := &protocol.Conversation{
+		ConversationID: "conv-1",
+		Participants:   []string{"local-agent", "remote-agent"},
+		CreatedAt:      time.Now(),
 	}
-	s.UpsertPeer(ctx, peer)
-
-	msg := &protocol.Message{
-		ID: "m2", ConversationID: "c1", From: "local-agent",
-		To: "remote-agent", Type: protocol.MessageTypeContext,
-		Body: "queued message", Priority: protocol.PriorityNormal,
-		Timestamp: time.Now(),
+	events := []*protocol.Event{
+		{ID: "ev-1", ConversationID: "conv-1", Type: protocol.EventTypeMessage},
 	}
 
-	status, err := mgr.ForwardMessage(ctx, "peer-away", msg)
-	if err != nil {
-		t.Fatalf("forward: %v", err)
-	}
-	if status != protocol.DeliveryStatusQueuedUnreachable {
-		t.Errorf("expected queued (hub unreachable), got %s", status)
-	}
-
-	// Verify message was queued
-	queued, err := s.DequeuePeerMessages(ctx, "peer-away")
-	if err != nil {
-		t.Fatalf("dequeue: %v", err)
-	}
-	if len(queued) != 1 {
-		t.Errorf("expected 1 queued, got %d", len(queued))
+	err := mgr.SyncConversation(ctx, "peer-away", conv, events)
+	if err == nil {
+		t.Error("expected error when peer is not connected")
 	}
 }
 
@@ -268,49 +256,53 @@ func TestManagerHandlePeerDisconnect(t *testing.T) {
 	}
 }
 
-func TestManagerFlushPeerQueue(t *testing.T) {
+func TestManagerHandleConversationSync(t *testing.T) {
 	mgr, s := newTestManager(t)
 	ctx := context.Background()
 
-	// Queue some messages for a peer
-	payload, _ := json.Marshal(protocol.PeerMessagePayload{
-		Message: &protocol.Message{
-			ID: "q1", ConversationID: "c1", From: "a", To: "b",
-			Type: protocol.MessageTypeContext, Body: "queued",
-			Priority: protocol.PriorityNormal, Timestamp: time.Now(),
+	// Prepare a conversation_sync envelope as if received from a remote peer.
+	conv := protocol.ConvMeta{
+		ID:           "conv-sync-1",
+		Participants: []string{"local-agent", "remote-agent"},
+		CreatedAt:    time.Now(),
+	}
+	events := []*protocol.Event{
+		{
+			ID:             "ev-sync-1",
+			ConversationID: "conv-sync-1",
+			Type:           protocol.EventTypeMessage,
+			FromAgent:      "remote-agent",
+			Timestamp:      time.Now(),
+			Data:           protocol.EventData{Body: "hello from remote"},
 		},
+	}
+	payload, _ := json.Marshal(protocol.PeerConversationSyncPayload{
+		Conversation: conv,
+		Events:       events,
 	})
 	env := &protocol.PeerEnvelope{
-		Method: "peer.message", ID: "r1", Version: protocol.ProtocolVersion,
-		From: "local-hub-id", Payload: payload,
-	}
-	s.EnqueuePeerMessage(ctx, "peer-flush", env)
-
-	// Connect the peer
-	conn := newMockPeerConn("peer-flush")
-	peer := &protocol.Peer{
-		PeerID: "peer-flush", Status: protocol.PeerStatusConnected,
-		LastSeen: time.Now(), ConnectedAt: time.Now(),
-		ProtoVersion: protocol.ProtocolVersion,
-	}
-	s.UpsertPeer(ctx, peer)
-	mgr.addPeerConn(ctx, "peer-flush", conn, peer)
-
-	// Flush
-	mgr.flushPeerQueue(ctx, "peer-flush")
-
-	// Give the write loop a moment to process
-	time.Sleep(50 * time.Millisecond)
-
-	// Verify message was sent
-	sent := conn.Sent()
-	if len(sent) == 0 {
-		t.Fatal("no envelopes sent after flush")
+		Method: "peer.conversation_sync", ID: "r1", Version: protocol.ProtocolVersion,
+		From: "peer-sender", Payload: payload,
 	}
 
-	// Verify queue is empty
-	remaining, _ := s.DequeuePeerMessages(ctx, "peer-flush")
-	if len(remaining) != 0 {
-		t.Errorf("expected empty queue after flush, got %d", len(remaining))
+	// Handle the envelope (simulates receiving from peer).
+	mgr.handlePeerEnvelope(ctx, "peer-sender", env)
+
+	// Verify conversation was saved.
+	saved, err := s.GetConversation(ctx, "conv-sync-1")
+	if err != nil {
+		t.Fatalf("get conversation: %v", err)
+	}
+	if saved == nil {
+		t.Fatal("expected conversation to be saved")
+	}
+
+	// Verify event was appended.
+	evts, err := s.ListEventsSince(ctx, "conv-sync-1", "")
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if len(evts) != 1 {
+		t.Errorf("expected 1 event, got %d", len(evts))
 	}
 }

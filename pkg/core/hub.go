@@ -21,18 +21,9 @@ type Notification struct {
 	Payload any    `json:"payload"`
 }
 
-// FederationForwarder is the interface the hub core uses to forward messages
-// to peer hubs. This avoids an import cycle with internal/federation.
+// FederationForwarder is the interface the hub core uses to interact with peer
+// hubs. This avoids an import cycle with internal/federation.
 type FederationForwarder interface {
-	// ForwardMessage sends a message to a peer hub.
-	ForwardMessage(ctx context.Context, peerID string, msg *protocol.Message) (protocol.DeliveryStatus, error)
-
-	// ForwardTaskCreate sends a task creation to the assignee's peer hub.
-	ForwardTaskCreate(ctx context.Context, peerID string, task *protocol.Task, attachments []*protocol.PeerAttachmentData) error
-
-	// ForwardTaskUpdate sends a task update to a peer hub.
-	ForwardTaskUpdate(ctx context.Context, peerID string, task *protocol.Task) error
-
 	// BroadcastAgentStatus notifies all peers about an agent status change.
 	BroadcastAgentStatus(ctx context.Context, agentID string, status protocol.AgentStatus)
 }
