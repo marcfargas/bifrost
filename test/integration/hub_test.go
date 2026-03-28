@@ -23,12 +23,13 @@ func TestAgentRegistrationAndDiscovery(t *testing.T) {
 	frontend := testutil.TestAgent("frontend")
 	backend := testutil.TestAgent("backend")
 
-	// Register frontend first.
+	// Register frontend and subscribe to agent_status channel.
 	if err := hub.Agents().Register(ctx, frontend); err != nil {
 		t.Fatalf("register frontend: %v", err)
 	}
+	hub.Store().Subscribe(ctx, frontend.AgentID, "channel:agent_status")
 
-	// Register backend — frontend should be notified.
+	// Register backend — frontend (subscribed) should be notified.
 	if err := hub.Agents().Register(ctx, backend); err != nil {
 		t.Fatalf("register backend: %v", err)
 	}

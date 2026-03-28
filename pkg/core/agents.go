@@ -52,13 +52,18 @@ func (r *AgentRegistry) Register(ctx context.Context, agent *protocol.Agent) err
 		return fmt.Errorf("agents: recompute aliases: %w", err)
 	}
 
-	// Notify all other online agents.
-	r.hub.NotifyAll(Notification{
-		Type:    "agent.registered",
-		Payload: agent,
-	}, agent.AgentID)
+	// Agent status is opt-in. Only notify agents subscribed to "channel:agent_status".
+	subs, _ := r.store.GetSubscribers(ctx, "channel:agent_status")
+	if len(subs) > 0 {
+		notif := Notification{Type: "agent.registered", Payload: agent}
+		for _, subID := range subs {
+			if subID != agent.AgentID {
+				r.hub.NotifyAgent(subID, notif)
+			}
+		}
+	}
 
-	// Broadcast status to federated peers.
+	// Broadcast status to federated peers (for agent sync, not notifications).
 	if fed := r.hub.Federation(); fed != nil {
 		fed.BroadcastAgentStatus(ctx, agent.AgentID, protocol.AgentStatusOnline)
 	}
@@ -75,10 +80,16 @@ func (r *AgentRegistry) Deregister(ctx context.Context, agentID string) error {
 		return fmt.Errorf("agents: deregister: %w", err)
 	}
 
-	r.hub.NotifyAll(Notification{
-		Type:    "agent.deregistered",
-		Payload: map[string]string{"agent_id": agentID},
-	}, agentID)
+	// Agent status is opt-in.
+	subs, _ := r.store.GetSubscribers(ctx, "channel:agent_status")
+	if len(subs) > 0 {
+		notif := Notification{Type: "agent.deregistered", Payload: map[string]string{"agent_id": agentID}}
+		for _, subID := range subs {
+			if subID != agentID {
+				r.hub.NotifyAgent(subID, notif)
+			}
+		}
+	}
 
 	// Broadcast status to federated peers.
 	if fed := r.hub.Federation(); fed != nil {
