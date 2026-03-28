@@ -78,7 +78,7 @@ func startHubForeground(cmd *cobra.Command) error {
 		cfg.Hub.MCP.Port = v
 	}
 
-	srv, err := hub.NewServer(&cfg)
+	srv, err := hub.NewServer(&cfg, nil)
 	if err != nil {
 		return fmt.Errorf("create server: %w", err)
 	}

@@ -33,7 +33,8 @@ type Server struct {
 
 // NewServer creates a Server: opens the SQLite store, creates the core Hub,
 // creates a ConnManager, registers it as a Notifier, and wires up the Handler.
-func NewServer(cfg *config.Config) (*Server, error) {
+// If logger is nil, slog.Default() is used.
+func NewServer(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 	dataDir := cfg.Storage.DataDir
 	if dataDir == "" {
 		dataDir = config.DataDir()
@@ -53,7 +54,9 @@ func NewServer(cfg *config.Config) (*Server, error) {
 	cm := NewConnManager()
 	h.AddNotifier(cm)
 
-	logger := slog.Default()
+	if logger == nil {
+		logger = slog.Default()
+	}
 
 	return &Server{
 		cfg:     cfg,
@@ -72,6 +75,64 @@ func (s *Server) SetPeerManager(pm PeerManager) {
 // Hub returns the underlying core.Hub for wiring federation or other components.
 func (s *Server) Hub() *core.Hub {
 	return s.hub
+}
+
+// Start begins the hub server in the background. It starts the local listener,
+// MCP HTTP transport (if enabled), housekeeping, and the accept loop. The server
+// runs until Stop is called or ctx is cancelled.
+// This is the non-blocking form used by tests; production code uses Run instead.
+func (s *Server) Start(ctx context.Context) error {
+	runCtx, cancel := context.WithCancel(ctx)
+	s.cancel = cancel
+
+	// Start local listener (platform-appropriate).
+	ln, err := newLocalListener(s.cfg)
+	if err != nil {
+		cancel()
+		return fmt.Errorf("server: start listener: %w", err)
+	}
+	s.listener = ln
+
+	// Start MCP HTTP transport if enabled.
+	if err := s.startMCPHTTP(runCtx); err != nil {
+		_ = ln.Close()
+		cancel()
+		return err
+	}
+
+	// Start housekeeping goroutine.
+	s.wg.Go(func() {
+		runHousekeeping(runCtx, s.cfg, s.hub)
+	})
+
+	// Start accept loop goroutine.
+	s.wg.Go(func() {
+		s.acceptLoop(runCtx)
+	})
+
+	return nil
+}
+
+// Stop shuts down the hub server started with Start.
+func (s *Server) Stop() {
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.stopMCPHTTP()
+	if s.listener != nil {
+		_ = s.listener.Close()
+	}
+	s.wg.Wait()
+	_ = s.hub.Store().Close()
+}
+
+// MCPHTTPPort returns the actual port the MCP HTTP transport is listening on.
+// Returns 0 if MCP HTTP is not enabled or not yet started.
+func (s *Server) MCPHTTPPort() int {
+	if s.mcpHTTP == nil {
+		return 0
+	}
+	return s.mcpHTTP.Port()
 }
 
 // Run starts the hub daemon. It blocks until a signal is received or ctx is

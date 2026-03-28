@@ -133,6 +133,25 @@ func (t *MCPHTTPTransport) Addr() string {
 	return t.addr
 }
 
+// Port returns the actual port the HTTP server is listening on.
+// Useful when configured with port 0 (OS-assigned). Returns 0 if not started.
+func (t *MCPHTTPTransport) Port() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.addr == "" {
+		return 0
+	}
+	_, portStr, err := net.SplitHostPort(t.addr)
+	if err != nil {
+		return 0
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 0
+	}
+	return port
+}
+
 // Sessions returns the session store (used by the hub for notifications).
 func (t *MCPHTTPTransport) Sessions() *MCPSessionStore {
 	return t.sessions
