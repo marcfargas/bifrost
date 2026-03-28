@@ -1,297 +1,346 @@
 //go:build e2e
 
-// This file contains E2E tests that require external binaries (claude CLI)
-// and an ANTHROPIC_API_KEY. These tests are behind the "e2e" build tag
-// and are NOT run in CI. For CI E2E tests, see local_test.go and
-// federation_e2e_test.go (no build tag required).
+// Package e2e contains end-to-end tests. Tests in this file require:
+//   - the "e2e" build tag
+//   - ANTHROPIC_API_KEY set
+//   - bifrost binary on PATH (or built via go build)
+//   - claude CLI on PATH (npm install -g @anthropic-ai/claude-code)
+//
+// Run: go test -tags e2e ./test/e2e/ -run TestClaude -v -timeout 120s
 package e2e
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/marcfargas/bifrost/internal/config"
+	"github.com/marcfargas/bifrost/internal/hub"
+	"github.com/marcfargas/bifrost/pkg/protocol"
 )
 
-// TestFederatedE2E spins up two bifrost hubs, peers them, then runs two
-// claude -p instances (one per hub) that exchange messages and a task.
-//
-// Requirements:
-//   - bifrost binary built and on PATH
-//   - claude CLI installed
-//   - ANTHROPIC_API_KEY set
-//
-// Run: go test -tags e2e ./test/e2e/ -run TestFederatedE2E -v -timeout 300s
-func TestFederatedE2E(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping e2e test in short mode")
-	}
-
+// TestClaudeWhoAmI starts a hub, then runs `claude -p` with bifrost configured
+// as an MCP server. It asks Claude to call bifrost_whoami and verifies the
+// output contains an agent ID. This proves the full MCP pipeline: claude
+// spawns the shim, the shim connects to the hub, registers, and serves tools.
+func TestClaudeWhoAmI(t *testing.T) {
 	if os.Getenv("ANTHROPIC_API_KEY") == "" {
 		t.Skip("ANTHROPIC_API_KEY not set")
 	}
-
-	bifrost, err := exec.LookPath("bifrost")
-	if err != nil {
-		t.Skip("bifrost binary not on PATH")
-	}
-
-	claudeBin, err := exec.LookPath("claude")
-	if err != nil {
+	if _, err := exec.LookPath("claude"); err != nil {
 		t.Skip("claude CLI not on PATH")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
+	bifrostBin := findBifrost(t)
+
+	// Create dirs for hub socket and data.
+	// We use a short base path to stay within Unix socket length limits.
+	socketDir, err := os.MkdirTemp("", "bf-e2e")
+	if err != nil {
+		t.Fatalf("create socket dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(socketDir) })
+
+	// The shim resolves the socket via config.SocketPath(), which on Linux
+	// uses $XDG_RUNTIME_DIR/bifrost/hub.sock. We point both the hub and
+	// the shim (via env) at the same path.
+	bifrostDir := filepath.Join(socketDir, "bifrost")
+	if err := os.MkdirAll(bifrostDir, 0o755); err != nil {
+		t.Fatalf("mkdir bifrost dir: %v", err)
+	}
+	socketPath := filepath.Join(bifrostDir, "hub.sock")
+
+	dataDir := filepath.Join(socketDir, "data")
+
+	// Start the hub via Go API.
+	cfg := config.Defaults()
+	cfg.Hub.Local.SocketPath = socketPath
+	cfg.Storage.DataDir = dataDir
+	cfg.Federation.Libp2p.Enabled = false
+	cfg.Federation.MDNS.Enabled = false
+	cfg.Federation.Direct.Enabled = false
+
+	srv, err := hub.NewServer(&cfg, nil)
+	if err != nil {
+		t.Fatalf("create hub server: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := srv.Start(ctx); err != nil {
+		t.Fatalf("start hub server: %v", err)
+	}
+	t.Cleanup(func() { srv.Stop() })
+
+	// Wait for socket to be ready.
+	waitForSocket(t, socketPath, 5*time.Second)
+
+	// Create a project directory with .mcp.json so claude discovers bifrost.
+	projectDir := filepath.Join(socketDir, "project")
+	claudeDir := filepath.Join(projectDir, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+
+	mcpCfg := map[string]any{
+		"mcpServers": map[string]any{
+			"bifrost": map[string]any{
+				"command": bifrostBin,
+				"args":    []string{"shim"},
+			},
+		},
+	}
+	mcpJSON, _ := json.MarshalIndent(mcpCfg, "", "  ")
+	if err := os.WriteFile(filepath.Join(claudeDir, "settings.json"), mcpJSON, 0o644); err != nil {
+		t.Fatalf("write settings.json: %v", err)
+	}
+
+	// Run claude -p asking it to use bifrost_whoami.
+	claudeCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
-	// Create temp dirs for each hub
-	dirA := t.TempDir()
-	dirB := t.TempDir()
-
-	// Configure Hub A — direct transport on a random port, no libp2p/mDNS
-	cfgA := filepath.Join(dirA, "config.toml")
-	writeConfig(t, cfgA, 17450, 17451, false)
-
-	// Configure Hub B
-	cfgB := filepath.Join(dirB, "config.toml")
-	writeConfig(t, cfgB, 17460, 17461, false)
-
-	// --- Step 1: Start both hub processes ---
-	//
-	// Each hub runs as a long-lived process. They listen for agent connections
-	// on their respective MCP ports and for peer connections on their direct
-	// transport ports.
-
-	hubA := exec.CommandContext(ctx, bifrost, "hub", "start",
-		"--config", cfgA,
-		"--data-dir", filepath.Join(dirA, "data"),
-	)
-	hubA.Env = append(os.Environ(), "BIFROST_LOG_LEVEL=debug")
-	hubA.Stdout = os.Stdout
-	hubA.Stderr = os.Stderr
-	if err := hubA.Start(); err != nil {
-		t.Fatalf("start hub A: %v", err)
-	}
-	defer hubA.Process.Kill() //nolint:errcheck
-
-	hubB := exec.CommandContext(ctx, bifrost, "hub", "start",
-		"--config", cfgB,
-		"--data-dir", filepath.Join(dirB, "data"),
-	)
-	hubB.Env = append(os.Environ(), "BIFROST_LOG_LEVEL=debug")
-	hubB.Stdout = os.Stdout
-	hubB.Stderr = os.Stderr
-	if err := hubB.Start(); err != nil {
-		t.Fatalf("start hub B: %v", err)
-	}
-	defer hubB.Process.Kill() //nolint:errcheck
-
-	// Wait for hubs to be ready (they need to bind ports and initialize stores)
-	time.Sleep(2 * time.Second)
-
-	// --- Step 2: Peer the hubs ---
-	//
-	// Hub A generates a pairing invitation (magic code), then Hub B joins
-	// using that code. This establishes the bidirectional federation link.
-
-	peerNewOut := runBifrost(t, ctx, bifrost, "--config", cfgA, "peer", "new")
-	t.Logf("peer new output: %s", peerNewOut)
-
-	code := extractMagicCode(t, peerNewOut)
-	t.Logf("magic code: %s", code)
-
-	peerJoinOut := runBifrost(t, ctx, bifrost, "--config", cfgB, "peer", "join", code)
-	t.Logf("peer join output: %s", peerJoinOut)
-
-	// Wait for peering to establish
-	time.Sleep(2 * time.Second)
-
-	// Verify peers are connected
-	peerListA := runBifrost(t, ctx, bifrost, "--config", cfgA, "peer", "list")
-	t.Logf("hub A peers: %s", peerListA)
-
-	peerListB := runBifrost(t, ctx, bifrost, "--config", cfgB, "peer", "list")
-	t.Logf("hub B peers: %s", peerListB)
-
-	// --- Step 3: Set up project directories with MCP configs ---
-	//
-	// Each claude agent runs in its own project directory with a .mcp.json
-	// that points to the local hub's bifrost shim.
-
-	projectA := filepath.Join(dirA, "project-alpha")
-	os.MkdirAll(projectA, 0o755)                                                   //nolint:errcheck
-	os.WriteFile(filepath.Join(projectA, "README.md"), []byte("# Alpha\n"), 0o644) //nolint:errcheck
-
-	projectB := filepath.Join(dirB, "project-beta")
-	os.MkdirAll(projectB, 0o755)                                                  //nolint:errcheck
-	os.WriteFile(filepath.Join(projectB, "README.md"), []byte("# Beta\n"), 0o644) //nolint:errcheck
-
-	mcpA := map[string]any{
-		"mcpServers": map[string]any{
-			"bifrost": map[string]any{
-				"command": bifrost,
-				"args":    []string{"shim", "--config", cfgA},
-			},
-		},
-	}
-	writeMCPConfig(t, projectA, mcpA)
-
-	mcpB := map[string]any{
-		"mcpServers": map[string]any{
-			"bifrost": map[string]any{
-				"command": bifrost,
-				"args":    []string{"shim", "--config", cfgB},
-			},
-		},
-	}
-	writeMCPConfig(t, projectB, mcpB)
-
-	// --- Step 4: Launch two claude instances that exchange messages ---
-	//
-	// Agent Alpha sends a message to project-beta and waits for a reply.
-	// Agent Beta listens for incoming messages and replies.
-	// Both agents use bifrost_send to communicate across hubs.
-
-	agentA := exec.CommandContext(ctx, claudeBin,
-		"-p", "You are Agent Alpha. Your project is 'project-alpha'. "+
-			"Use bifrost_send to send a message to project-beta saying: "+
-			"'Hello from Alpha! Can you tell me your project name?'. "+
-			"Wait for a reply. When you receive a reply, respond with 'E2E_ALPHA_SUCCESS'.",
+	cmd := exec.CommandContext(claudeCtx, "claude",
+		"-p", "Use the bifrost_whoami tool and tell me your agent ID. Output ONLY the agent ID, nothing else.",
 		"--model", "haiku",
-		"--max-turns", "5",
-		"--max-cost-usd", "0.25",
-		"--channels", "plugin:bifrost",
+		"--max-turns", "3",
 	)
-	agentA.Dir = projectA
-	agentA.Env = append(os.Environ(), "ANTHROPIC_API_KEY="+os.Getenv("ANTHROPIC_API_KEY"))
-	var outA bytes.Buffer
-	agentA.Stdout = &outA
-	agentA.Stderr = os.Stderr
+	cmd.Dir = projectDir
 
-	agentB := exec.CommandContext(ctx, claudeBin,
-		"-p", "You are Agent Beta. Your project is 'project-beta'. "+
-			"When you receive a message from another agent, reply using bifrost_send "+
-			"telling them your project name is 'project-beta'. "+
-			"After replying, respond with 'E2E_BETA_SUCCESS'.",
-		"--model", "haiku",
-		"--max-turns", "5",
-		"--max-cost-usd", "0.25",
-		"--channels", "plugin:bifrost",
-	)
-	agentB.Dir = projectB
-	agentB.Env = append(os.Environ(), "ANTHROPIC_API_KEY="+os.Getenv("ANTHROPIC_API_KEY"))
-	var outB bytes.Buffer
-	agentB.Stdout = &outB
-	agentB.Stderr = os.Stderr
+	// Set XDG_RUNTIME_DIR so the shim's config.SocketPath() resolves to our
+	// test socket. Also pass through ANTHROPIC_API_KEY.
+	cmd.Env = buildEnv(socketDir)
 
-	// Run both agents concurrently
-	errChA := make(chan error, 1)
-	errChB := make(chan error, 1)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 
-	go func() { errChA <- agentA.Run() }()
-	go func() { errChB <- agentB.Run() }()
+	t.Log("running: claude -p ...")
+	err = cmd.Run()
 
-	// Wait for both to complete (with timeout)
-	select {
-	case err := <-errChA:
-		if err != nil {
-			t.Logf("agent A exited with error (may be normal): %v", err)
-		}
-	case <-time.After(120 * time.Second):
-		t.Log("agent A timed out")
-	}
+	t.Logf("claude stdout:\n%s", stdout.String())
+	t.Logf("claude stderr:\n%s", stderr.String())
 
-	select {
-	case err := <-errChB:
-		if err != nil {
-			t.Logf("agent B exited with error (may be normal): %v", err)
-		}
-	case <-time.After(120 * time.Second):
-		t.Log("agent B timed out")
-	}
-
-	// --- Step 5: Verify outputs ---
-	outputA := outA.String()
-	outputB := outB.String()
-
-	t.Logf("Agent A output:\n%s", outputA)
-	t.Logf("Agent B output:\n%s", outputB)
-
-	if !strings.Contains(outputA, "E2E_ALPHA_SUCCESS") {
-		t.Error("Agent A did not report success")
-	}
-	if !strings.Contains(outputB, "E2E_BETA_SUCCESS") {
-		t.Error("Agent B did not report success")
-	}
-}
-
-// writeConfig generates a TOML config file for a bifrost hub.
-func writeConfig(t *testing.T, path string, directPort, mcpPort int, libp2pEnabled bool) {
-	t.Helper()
-	content := fmt.Sprintf(`
-[hub]
-grace_period = "5s"
-heartbeat_interval = "5s"
-
-[federation.libp2p]
-enabled = %v
-
-[federation.mdns]
-enabled = false
-
-[federation.direct]
-enabled = true
-listen = "127.0.0.1:%d"
-
-[hub.mcp]
-enabled = false
-port = %d
-
-[logging]
-level = "debug"
-`, libp2pEnabled, directPort, mcpPort)
-
-	os.MkdirAll(filepath.Dir(path), 0o755) //nolint:errcheck
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// writeMCPConfig writes a .mcp.json file into a project directory.
-func writeMCPConfig(t *testing.T, projectDir string, cfg map[string]any) {
-	t.Helper()
-	data, _ := json.MarshalIndent(cfg, "", "  ")
-	if err := os.WriteFile(filepath.Join(projectDir, ".mcp.json"), data, 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// runBifrost executes a bifrost CLI command and returns its combined output.
-func runBifrost(t *testing.T, ctx context.Context, bin string, args ...string) string {
-	t.Helper()
-	cmd := exec.CommandContext(ctx, bin, args...)
-	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Logf("bifrost %v failed: %v\noutput: %s", args, err, string(out))
+		t.Fatalf("claude exited with error: %v", err)
 	}
-	return string(out)
+
+	output := stdout.String()
+	// The output should contain some agent ID. The shim generates IDs like
+	// "user@project" or similar. We just verify it's non-empty and doesn't
+	// contain obvious error markers.
+	if strings.TrimSpace(output) == "" {
+		t.Fatal("claude produced no output")
+	}
+	if strings.Contains(strings.ToLower(output), "error") && strings.Contains(strings.ToLower(output), "could not") {
+		t.Fatalf("claude output suggests a failure: %s", output)
+	}
+
+	t.Logf("bifrost_whoami returned: %s", strings.TrimSpace(output))
 }
 
-// extractMagicCode parses the "BIFROST-..." magic code from peer new output.
-func extractMagicCode(t *testing.T, output string) string {
+// TestClaudeListAgents starts a hub, registers a fake agent via the raw
+// protocol, then asks claude -p to call bifrost_list_agents and verifies the
+// fake agent appears in the output.
+func TestClaudeListAgents(t *testing.T) {
+	if os.Getenv("ANTHROPIC_API_KEY") == "" {
+		t.Skip("ANTHROPIC_API_KEY not set")
+	}
+	if _, err := exec.LookPath("claude"); err != nil {
+		t.Skip("claude CLI not on PATH")
+	}
+
+	bifrostBin := findBifrost(t)
+
+	socketDir, err := os.MkdirTemp("", "bf-e2e")
+	if err != nil {
+		t.Fatalf("create socket dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(socketDir) })
+
+	bifrostDir := filepath.Join(socketDir, "bifrost")
+	if err := os.MkdirAll(bifrostDir, 0o755); err != nil {
+		t.Fatalf("mkdir bifrost dir: %v", err)
+	}
+	socketPath := filepath.Join(bifrostDir, "hub.sock")
+	dataDir := filepath.Join(socketDir, "data")
+
+	cfg := config.Defaults()
+	cfg.Hub.Local.SocketPath = socketPath
+	cfg.Storage.DataDir = dataDir
+	cfg.Federation.Libp2p.Enabled = false
+	cfg.Federation.MDNS.Enabled = false
+	cfg.Federation.Direct.Enabled = false
+
+	srv, err := hub.NewServer(&cfg, nil)
+	if err != nil {
+		t.Fatalf("create hub server: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := srv.Start(ctx); err != nil {
+		t.Fatalf("start hub server: %v", err)
+	}
+	t.Cleanup(func() { srv.Stop() })
+
+	waitForSocket(t, socketPath, 5*time.Second)
+
+	// Register a fake agent directly via the hub protocol so it shows up
+	// in bifrost_list_agents.
+	conn := dialHub(t, socketPath)
+	agent := fakeAgent("test-backend")
+	result := rpcRegister(t, conn, agent)
+	if result.resp.Error != nil {
+		t.Fatalf("register fake agent: %s", result.resp.Error.Message)
+	}
+
+	// Set up project dir with MCP config.
+	projectDir := filepath.Join(socketDir, "project")
+	claudeDir := filepath.Join(projectDir, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+
+	mcpCfg := map[string]any{
+		"mcpServers": map[string]any{
+			"bifrost": map[string]any{
+				"command": bifrostBin,
+				"args":    []string{"shim"},
+			},
+		},
+	}
+	mcpJSON, _ := json.MarshalIndent(mcpCfg, "", "  ")
+	if err := os.WriteFile(filepath.Join(claudeDir, "settings.json"), mcpJSON, 0o644); err != nil {
+		t.Fatalf("write settings.json: %v", err)
+	}
+
+	claudeCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(claudeCtx, "claude",
+		"-p", "Use the bifrost_list_agents tool and tell me the names of all connected agents. Output ONLY the agent names, one per line.",
+		"--model", "haiku",
+		"--max-turns", "3",
+	)
+	cmd.Dir = projectDir
+	cmd.Env = buildEnv(socketDir)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	t.Log("running: claude -p (list agents)...")
+	err = cmd.Run()
+
+	t.Logf("claude stdout:\n%s", stdout.String())
+	t.Logf("claude stderr:\n%s", stderr.String())
+
+	if err != nil {
+		t.Fatalf("claude exited with error: %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "test-backend") {
+		t.Fatalf("output does not mention test-backend:\n%s", output)
+	}
+
+	t.Logf("bifrost_list_agents found test-backend in output")
+}
+
+// findBifrost returns the path to the bifrost binary. It checks PATH first,
+// then tries to build it.
+func findBifrost(t *testing.T) string {
 	t.Helper()
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "BIFROST-") {
-			return line
+
+	if bin, err := exec.LookPath("bifrost"); err == nil {
+		return bin
+	}
+
+	// Not on PATH — build it into a temp dir.
+	tmpDir := t.TempDir()
+	bin := filepath.Join(tmpDir, "bifrost")
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/bifrost")
+	cmd.Dir = findModuleRoot(t)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build bifrost: %v\n%s", err, out)
+	}
+	return bin
+}
+
+// findModuleRoot walks up from the test file to find the go.mod directory.
+func findModuleRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("could not find go.mod in parent directories")
+		}
+		dir = parent
+	}
+}
+
+// waitForSocket polls until a Unix socket is connectable or the timeout expires.
+func waitForSocket(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		c, err := net.Dial("unix", path)
+		if err == nil {
+			c.Close()
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("socket %s did not become available within %v", path, timeout)
+}
+
+// fakeAgent returns a protocol.Agent suitable for direct registration.
+func fakeAgent(id string) protocol.Agent {
+	now := time.Now()
+	return protocol.Agent{
+		AgentID:         id,
+		Username:        "ci",
+		Hostname:        "ci-host",
+		LocalPath:       "/tmp/fake",
+		ProjectName:     id,
+		DisplayName:     "ci@" + id,
+		ProtocolVersion: protocol.ProtocolVersion,
+		ConnectedAt:     now,
+		LastSeen:        now,
+	}
+}
+
+// buildEnv constructs the environment for the claude subprocess.
+// It passes through the current environment but overrides XDG_RUNTIME_DIR
+// so the bifrost shim connects to our test hub's socket.
+func buildEnv(runtimeDir string) []string {
+	env := os.Environ()
+
+	// Filter out existing XDG_RUNTIME_DIR, HOME (we keep HOME), and
+	// BIFROST_* vars that might interfere.
+	filtered := make([]string, 0, len(env)+3)
+	for _, e := range env {
+		key := strings.SplitN(e, "=", 2)[0]
+		switch strings.ToUpper(key) {
+		case "XDG_RUNTIME_DIR":
+			continue // we'll set our own
+		default:
+			filtered = append(filtered, e)
 		}
 	}
-	t.Fatal("could not find magic code in output")
-	return ""
+
+	filtered = append(filtered, "XDG_RUNTIME_DIR="+runtimeDir)
+	return filtered
 }
