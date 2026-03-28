@@ -31,7 +31,7 @@ var hubStartCmd = &cobra.Command{
 		if hubStartDaemon {
 			return startHubDaemon()
 		}
-		return startHubForeground()
+		return startHubForeground(cmd)
 	},
 }
 
@@ -53,16 +53,29 @@ var hubStatusCmd = &cobra.Command{
 
 func init() {
 	hubStartCmd.Flags().BoolVarP(&hubStartDaemon, "daemon", "d", false, "Start as background process")
+	hubStartCmd.Flags().Bool("hub.mcp.enabled", false, "Enable MCP Streamable HTTP endpoint")
+	hubStartCmd.Flags().Int("hub.mcp.port", 7433, "MCP HTTP listen port")
 	hubCmd.AddCommand(hubStartCmd)
 	hubCmd.AddCommand(hubStopCmd)
 	hubCmd.AddCommand(hubStatusCmd)
 }
 
-// startHubForeground loads config, creates a server, and runs in the foreground.
-func startHubForeground() error {
+// startHubForeground loads config, applies any CLI flag overrides, creates a
+// server, and runs in the foreground.
+func startHubForeground(cmd *cobra.Command) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
+	}
+
+	// Apply CLI flag overrides.
+	if cmd.Flags().Changed("hub.mcp.enabled") {
+		v, _ := cmd.Flags().GetBool("hub.mcp.enabled")
+		cfg.Hub.MCP.Enabled = v
+	}
+	if cmd.Flags().Changed("hub.mcp.port") {
+		v, _ := cmd.Flags().GetInt("hub.mcp.port")
+		cfg.Hub.MCP.Port = v
 	}
 
 	srv, err := hub.NewServer(&cfg)
