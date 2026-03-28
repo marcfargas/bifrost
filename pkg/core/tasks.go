@@ -98,21 +98,26 @@ func (m *TaskManager) CreateTask(ctx context.Context, requesterID, assigneeAddr,
 		return nil, fmt.Errorf("tasks: subscribe assignee: %w", err)
 	}
 
-	// Notify assignee — forward via federation if the assignee is on a peer hub.
-	if assignee.PeerHub != "" {
-		if fed := m.hub.Federation(); fed != nil {
-			if err := fed.ForwardTaskCreate(ctx, assignee.PeerHub, task, nil); err != nil {
-				// Non-fatal: task is created, just notification failed.
-				// It will be delivered when the peer reconnects.
-				_ = err
-			}
-		}
-	} else {
-		m.hub.NotifyAgent(assignee.AgentID, Notification{
-			Type:    "task_requested",
-			Payload: task,
-		})
+	// Notify assignee via the message router — this handles local delivery,
+	// federation forwarding, DND queuing, and offline queuing automatically.
+	// Tasks are conversations: the task notification is a message in the
+	// task's conversation, routed like any other message.
+	taskMsg := &protocol.Message{
+		ID:             protocol.NewID(),
+		ConversationID: task.ConversationID,
+		From:           requesterID,
+		To:             "agent:" + assignee.AgentID,
+		Type:           protocol.MessageTypeContext,
+		Body:           "Task requested: " + task.Title + "\n\n" + task.Description,
+		Priority:       protocol.PriorityNormal,
 	}
+	m.hub.Messages().Send(ctx, taskMsg)
+
+	// Also push the structured task notification for channel display.
+	m.hub.NotifyAgent(assignee.AgentID, Notification{
+		Type:    "task_requested",
+		Payload: task,
+	})
 
 	return task, nil
 }
@@ -166,25 +171,34 @@ func (m *TaskManager) UpdateTask(ctx context.Context, callerAgentID, taskID stri
 		_ = m.store.TouchConversation(ctx, task.ConversationID)
 	}
 
-	// Notify all subscribers except the caller.
-	// For remote agents, forward via federation.
+	// Notify all subscribers except the caller via the message router.
+	// This handles federation, DND, and offline queuing automatically.
 	subscribers, err := m.store.GetSubscribers(ctx, "task:"+taskID)
 	if err == nil {
-		notif := Notification{Type: "task_updated", Payload: task}
-		forwarded := make(map[string]bool) // track which peer hubs we've forwarded to
+		statusMsg := fmt.Sprintf("Task %s: %s", task.Status, task.Title)
+		if task.Summary != "" {
+			statusMsg += "\n" + task.Summary
+		}
+		if task.Reason != "" {
+			statusMsg += "\nReason: " + task.Reason
+		}
+
 		for _, agentID := range subscribers {
 			if agentID == callerAgentID {
 				continue
 			}
-			// Check if the subscriber is on a peer hub.
-			if sub, err := m.store.GetAgent(ctx, agentID); err == nil && sub.PeerHub != "" {
-				if fed := m.hub.Federation(); fed != nil && !forwarded[sub.PeerHub] {
-					fed.ForwardTaskUpdate(ctx, sub.PeerHub, task)
-					forwarded[sub.PeerHub] = true
-				}
-				continue
-			}
-			m.hub.NotifyAgent(agentID, notif)
+			// Send as a message — the router handles federation/offline/DND.
+			m.hub.Messages().Send(ctx, &protocol.Message{
+				ID:             protocol.NewID(),
+				ConversationID: task.ConversationID,
+				From:           callerAgentID,
+				To:             "agent:" + agentID,
+				Type:           protocol.MessageTypeStatus,
+				Body:           statusMsg,
+				Priority:       protocol.PriorityNormal,
+			})
+			// Also push the structured notification for channel display.
+			m.hub.NotifyAgent(agentID, Notification{Type: "task_updated", Payload: task})
 		}
 	}
 
