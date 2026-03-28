@@ -54,6 +54,28 @@ jobs:
       - name: Integration tests
         run: go test ./test/integration/ -count=1 -v -timeout 120s
 
+  e2e:
+    name: E2E (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build binary
+        run: go build -o bifrost ./cmd/bifrost
+
+      - name: E2E tests
+        run: go test ./test/e2e/ -count=1 -v -timeout 60s
+
   plugin:
     name: Plugin verification
     runs-on: ubuntu-latest
