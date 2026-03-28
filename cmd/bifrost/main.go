@@ -21,6 +21,7 @@ func main() {
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(newPeerCmd())
+	rootCmd.AddCommand(newLogsCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

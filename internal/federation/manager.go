@@ -831,6 +831,8 @@ func (m *Manager) sendHeartbeats(ctx context.Context) {
 }
 
 // reconnectKnownPeers tries to reconnect to previously connected peers on startup.
+// Peers that were marked "connected" from a prior run are first reset to
+// "disconnected" because no actual connection exists after a hub restart.
 func (m *Manager) reconnectKnownPeers(ctx context.Context) {
 	peers, err := m.store.ListPeers(ctx)
 	if err != nil {
@@ -838,6 +840,17 @@ func (m *Manager) reconnectKnownPeers(ctx context.Context) {
 		return
 	}
 
+	// Reset any peer that claims to be connected — the hub just started, so
+	// those connections are stale records from the previous run.
+	for _, peer := range peers {
+		if peer.Status == protocol.PeerStatusConnected {
+			m.logger.Info("resetting stale connected peer to disconnected on startup",
+				"peer_id", peer.PeerID)
+			m.store.UpdatePeerStatus(ctx, peer.PeerID, protocol.PeerStatusDisconnected, 0)
+		}
+	}
+
+	// Now attempt to re-establish connections for peers with known addresses.
 	for _, peer := range peers {
 		if peer.Address == "" {
 			continue // cannot reconnect without address (e.g., mDNS-only)
