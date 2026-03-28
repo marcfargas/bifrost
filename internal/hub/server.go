@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,13 +20,15 @@ import (
 // Server is the hub daemon. It owns the listener, connection manager, and
 // core Hub, and drives the RPC accept loop.
 type Server struct {
-	cfg     *config.Config
-	hub     *core.Hub
-	connMgr *ConnManager
+	cfg      *config.Config
+	hub      *core.Hub
+	connMgr  *ConnManager
 	listener transport.Listener
 	handler  *Handler
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
+	logger   *slog.Logger
+	mcpHTTP  *transport.MCPHTTPTransport // nil if MCP HTTP is disabled
 }
 
 // NewServer creates a Server: opens the SQLite store, creates the core Hub,
@@ -50,11 +53,14 @@ func NewServer(cfg *config.Config) (*Server, error) {
 	cm := NewConnManager()
 	h.AddNotifier(cm)
 
+	logger := slog.Default()
+
 	return &Server{
 		cfg:     cfg,
 		hub:     h,
 		connMgr: cm,
-		handler:  NewHandler(h, cm),
+		handler: NewHandler(h, cm),
+		logger:  logger,
 	}, nil
 }
 
@@ -88,6 +94,13 @@ func (s *Server) Run(ctx context.Context) error {
 		return fmt.Errorf("server: write PID file: %w", err)
 	}
 
+	// Start MCP HTTP transport if enabled.
+	if err := s.startMCPHTTP(runCtx); err != nil {
+		_ = ln.Close()
+		s.removePIDFile()
+		return err
+	}
+
 	// Start housekeeping goroutine.
 	s.wg.Go(func() {
 		runHousekeeping(runCtx, s.cfg, s.hub)
@@ -110,12 +123,41 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// Clean shutdown.
 	cancel()
+	s.stopMCPHTTP()
 	_ = s.listener.Close()
 	s.wg.Wait()
 	_ = s.hub.Store().Close()
 	s.removePIDFile()
 
 	return nil
+}
+
+// startMCPHTTP starts the MCP HTTP transport when cfg.Hub.MCP.Enabled is true.
+func (s *Server) startMCPHTTP(ctx context.Context) error {
+	if !s.cfg.Hub.MCP.Enabled {
+		s.logger.Info("MCP HTTP transport disabled")
+		return nil
+	}
+
+	s.mcpHTTP = transport.NewMCPHTTPTransport(s.hub, s.cfg.Hub.MCP, s.logger)
+	if err := s.mcpHTTP.Start(ctx); err != nil {
+		return fmt.Errorf("hub: start MCP HTTP: %w", err)
+	}
+
+	// Register the MCP HTTP transport as a notifier so the hub can
+	// deliver notifications to HTTP-connected agents.
+	s.hub.AddNotifier(s.mcpHTTP)
+
+	return nil
+}
+
+// stopMCPHTTP gracefully stops the MCP HTTP transport if it was started.
+func (s *Server) stopMCPHTTP() {
+	if s.mcpHTTP != nil {
+		if err := s.mcpHTTP.Stop(); err != nil {
+			s.logger.Error("MCP HTTP transport stop error", "err", err)
+		}
+	}
 }
 
 // acceptLoop accepts incoming connections and spawns a handler goroutine for each.
