@@ -7,6 +7,7 @@ on:
     branches: [main, develop]
 
 jobs:
+  # 1. Build, lint, unit tests, race detector — all platforms
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -17,125 +18,56 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-
-      - name: Download dependencies
-        run: go mod download
 
       - name: Build
         run: go build ./...
 
-      - name: Unit tests
-        run: go test ./... -short -count=1
-
-      - name: Unit tests (race detector)
+      - name: Lint (vet)
         if: runner.os == 'Linux'
-        run: go test ./... -race -short -count=1
+        run: go vet ./...
 
-  integration:
-    name: Integration (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    needs: test
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
+      - name: Lint (gofmt)
+        if: runner.os == 'Linux'
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Files not formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
 
-    steps:
-      - uses: actions/checkout@v4
+      - name: Unit + integration tests
+        run: go test ./... -count=1 -timeout 120s
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
+      - name: Race detector
+        if: runner.os == 'Linux'
+        run: go test ./... -race -count=1 -timeout 120s
 
-      - name: Integration tests
-        run: go test ./test/integration/ -count=1 -v -timeout 120s
-
-  e2e:
-    name: E2E (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    needs: test
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Build binary
-        run: go build -o bifrost ./cmd/bifrost
-
-      - name: E2E tests
-        run: go test ./test/e2e/ -count=1 -v -timeout 60s
-
-  plugin:
-    name: Plugin verification
-    runs-on: ubuntu-latest
-    needs: test
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Build binary
-        run: go build -o bifrost ./cmd/bifrost
-
-      - name: Verify bifrost version
-        run: ./bifrost version
-
-      - name: Verify MCP shim responds to initialize
+      - name: Plugin verification
+        if: runner.os == 'Linux'
         shell: bash
         run: |
+          go build -o bifrost ./cmd/bifrost
+          ./bifrost version
+          # Verify shim responds to MCP initialize
           INIT='{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
           output=$(printf '%s\n' "$INIT" | { cat; sleep 2; } | timeout 5 ./bifrost shim 2>/dev/null || true)
-          echo "$output"
           if echo "$output" | grep -q '"serverInfo"'; then
-            echo "Shim OK — MCP server responded with serverInfo"
+            echo "Shim MCP: OK"
           else
-            echo "FAIL: MCP shim did not respond"
+            echo "FAIL: shim did not respond to initialize"
             exit 1
           fi
+          # Verify plugin files
+          jq -e '.name == "bifrost"' plugin/.claude-plugin/plugin.json > /dev/null
+          echo "plugin.json: OK"
+          jq -e '.mcpServers.bifrost.command' plugin/.mcp.json > /dev/null
+          echo ".mcp.json: OK"
 
-      - name: Verify plugin.json
-        shell: bash
-        run: |
-          if [ ! -f plugin/.claude-plugin/plugin.json ]; then
-            echo "FAIL: plugin.json missing"
-            exit 1
-          fi
-          name=$(jq -r '.name' plugin/.claude-plugin/plugin.json)
-          version=$(jq -r '.version' plugin/.claude-plugin/plugin.json)
-          if [ "$name" != "bifrost" ] || [ -z "$version" ]; then
-            echo "FAIL: plugin.json invalid (name=$name, version=$version)"
-            exit 1
-          fi
-          echo "plugin.json OK (name=$name, version=$version)"
-
-      - name: Verify .mcp.json
-        shell: bash
-        run: |
-          if [ ! -f plugin/.mcp.json ]; then
-            echo "FAIL: .mcp.json missing"
-            exit 1
-          fi
-          cmd=$(jq -r '.mcpServers.bifrost.command' plugin/.mcp.json)
-          if [ -z "$cmd" ]; then
-            echo "FAIL: .mcp.json has no bifrost server command"
-            exit 1
-          fi
-          echo ".mcp.json OK (command=$cmd)"
-
+  # 2. Claude E2E — real claude -p with bifrost MCP tools (needs API key)
   claude-e2e:
     name: Claude E2E
     runs-on: ubuntu-latest
@@ -146,42 +78,19 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
       - name: Build bifrost
-        run: go build -o bifrost ./cmd/bifrost
+        run: |
+          go build -o bifrost ./cmd/bifrost
+          echo "$PWD" >> "$GITHUB_PATH"
 
       - name: Install Claude Code
         if: env.ANTHROPIC_API_KEY != ''
         run: npm install -g @anthropic-ai/claude-code
 
-      - name: Claude E2E tests
+      - name: Run Claude E2E tests
         if: env.ANTHROPIC_API_KEY != ''
-        run: |
-          export PATH="$PWD:$PATH"
-          go test -tags e2e ./test/e2e/ -v -timeout 120s -run TestClaude
-
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Vet
-        run: go vet ./...
-
-      - name: Check formatting
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "Files not formatted:"
-            echo "$unformatted"
-            exit 1
-          fi
+        run: go test -tags e2e ./test/e2e/ -v -timeout 120s -run TestClaude
