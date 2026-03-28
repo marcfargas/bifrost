@@ -96,14 +96,26 @@ jobs:
         if: env.ANTHROPIC_AUTH_TOKEN != ''
         run: npm install -g @anthropic-ai/claude-code
 
-      - name: "E2E: MCP mode — bifrost_whoami"
+      - name: "E2E: whoami"
         if: env.ANTHROPIC_AUTH_TOKEN != ''
         run: go test -tags e2e ./test/e2e/ -v -timeout 120s -run TestClaudeMCP_WhoAmI
 
-      - name: "E2E: MCP mode — bifrost_list_agents"
+      - name: "E2E: list agents"
         if: env.ANTHROPIC_AUTH_TOKEN != ''
         run: go test -tags e2e ./test/e2e/ -v -timeout 120s -run TestClaudeMCP_ListAgents
 
-      - name: "E2E: Plugin mode — bifrost_whoami"
+      - name: "E2E: send message"
+        if: env.ANTHROPIC_AUTH_TOKEN != ''
+        run: go test -tags e2e ./test/e2e/ -v -timeout 120s -run TestClaudeMCP_SendMessage
+
+      - name: "E2E: create task"
+        if: env.ANTHROPIC_AUTH_TOKEN != ''
+        run: go test -tags e2e ./test/e2e/ -v -timeout 120s -run TestClaudeMCP_CreateAndListTask
+
+      - name: "E2E: two-agent conversation"
+        if: env.ANTHROPIC_AUTH_TOKEN != ''
+        run: go test -tags e2e ./test/e2e/ -v -timeout 120s -run TestClaudeMCP_TwoAgentConversation
+
+      - name: "E2E: plugin mode (skipped — needs investigation)"
         if: env.ANTHROPIC_AUTH_TOKEN != ''
         run: go test -tags e2e ./test/e2e/ -v -timeout 120s -run TestClaudePlugin_WhoAmI

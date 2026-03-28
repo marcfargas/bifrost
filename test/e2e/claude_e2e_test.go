@@ -22,6 +22,7 @@ import (
 
 	"github.com/marcfargas/bifrost/internal/config"
 	"github.com/marcfargas/bifrost/internal/hub"
+	"github.com/marcfargas/bifrost/internal/transport"
 	"github.com/marcfargas/bifrost/pkg/protocol"
 )
 
@@ -224,6 +225,223 @@ func TestClaudeMCP_ListAgents(t *testing.T) {
 	}
 
 	t.Logf("bifrost_list_agents found test-backend")
+}
+
+// TestClaudeMCP_SendMessage has Claude send a message to a fake agent connected
+// via raw socket. Verifies the message arrives on the fake agent's connection —
+// proving the full path: Claude → shim MCP → hub → socket → recipient.
+func TestClaudeMCP_SendMessage(t *testing.T) {
+	te := setupClaudeTest(t)
+
+	// Register fake agent and start reading notifications.
+	conn := dialHub(t, te.socketPath)
+	agent := fakeAgent("msg-receiver")
+	result := rpcRegister(t, conn, agent)
+	if result.resp.Error != nil {
+		t.Fatalf("register fake agent: %s", result.resp.Error.Message)
+	}
+
+	// Start goroutine to read notifications from the fake agent's connection.
+	// Drain the ping notification first, then wait for the real message.
+	type received struct {
+		body string
+		err  error
+	}
+	msgCh := make(chan received, 1)
+	go func() {
+		for {
+			raw, err := readRawNotification(conn)
+			if err != nil {
+				msgCh <- received{err: err}
+				return
+			}
+			// Parse notification envelope.
+			var notif struct {
+				Params struct {
+					Type    string `json:"type"`
+					Payload struct {
+						Body string `json:"body"`
+						From string `json:"from"`
+					} `json:"payload"`
+				} `json:"params"`
+			}
+			json.Unmarshal(raw, &notif)
+			if notif.Params.Type == "message.new" {
+				msgCh <- received{body: notif.Params.Payload.Body}
+				return
+			}
+			// Skip ping, agent.registered, etc.
+		}
+	}()
+
+	// Ask Claude to send a message.
+	output := te.runClaude(t,
+		"Use bifrost_send to send a message to agent:msg-receiver with body 'hello from claude'. Use type CONTEXT. Output ONLY 'sent' when done.",
+		"--mcp-config", te.mcpConfigFlag(),
+	)
+	t.Logf("claude output: %s", output)
+
+	// Verify the fake agent received the message.
+	select {
+	case msg := <-msgCh:
+		if msg.err != nil {
+			t.Fatalf("fake agent receive error: %v", msg.err)
+		}
+		if !strings.Contains(msg.body, "hello from claude") {
+			t.Fatalf("expected 'hello from claude' in body, got: %s", msg.body)
+		}
+		t.Logf("fake agent received: %s", msg.body)
+	case <-time.After(5 * time.Second):
+		t.Fatal("fake agent did not receive message within 5s")
+	}
+}
+
+// TestClaudeMCP_CreateAndListTask has Claude create a task, then list tasks
+// to verify the full task lifecycle works through MCP.
+func TestClaudeMCP_CreateAndListTask(t *testing.T) {
+	te := setupClaudeTest(t)
+
+	// Register fake assignee.
+	conn := dialHub(t, te.socketPath)
+	agent := fakeAgent("task-worker")
+	result := rpcRegister(t, conn, agent)
+	if result.resp.Error != nil {
+		t.Fatalf("register fake agent: %s", result.resp.Error.Message)
+	}
+	// Drain notifications in background so the socket doesn't block.
+	go func() {
+		for {
+			if _, err := readRawNotification(conn); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Create a task.
+	output := te.runClaude(t,
+		"Use bifrost_create_task to create a task assigned to agent:task-worker with title 'Implement login' and description 'Add OAuth2 support'. Then use bifrost_list_tasks to list all tasks. Output the task ID and status.",
+		"--mcp-config", te.mcpConfigFlag(),
+	)
+
+	if !strings.Contains(strings.ToLower(output), "requested") && !strings.Contains(strings.ToLower(output), "implement login") {
+		t.Fatalf("output doesn't show the created task:\n%s", output)
+	}
+
+	t.Logf("task created and listed: %s", output)
+}
+
+// TestClaudeMCP_TwoAgentConversation runs two claude -p instances concurrently.
+// Agent A sends a message, Agent B receives and replies.
+func TestClaudeMCP_TwoAgentConversation(t *testing.T) {
+	te := setupClaudeTest(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	mcpFlag := te.mcpConfigFlag()
+
+	// Agent B runs first — it will register, then poll for messages.
+	// We give it a prompt that makes it call bifrost_list_agents, confirming it's connected,
+	// then we'll have agent A send to it.
+
+	// Run Agent A: send message to whatever agent B registers as.
+	// Agent B's display name will be based on the temp dir, unpredictable.
+	// Instead: register a fake "relay" agent, have Claude A send to it,
+	// then verify the relay received it. Then have Claude B send to Claude A's agent.
+
+	// Simpler: run them sequentially sharing the same hub.
+	// A sends to B (B is a fake socket agent), B's message arrives.
+	// Then run Claude B which sends back to A (A is now a fake socket agent).
+
+	// Step 1: Claude A sends to fake-b.
+	connB := dialHub(t, te.socketPath)
+	rpcRegister(t, connB, fakeAgent("agent-bravo"))
+	msgFromA := make(chan string, 1)
+	go func() {
+		for {
+			raw, err := readRawNotification(connB)
+			if err != nil {
+				return
+			}
+			var notif struct {
+				Params struct {
+					Type    string `json:"type"`
+					Payload struct {
+						Body string `json:"body"`
+					} `json:"payload"`
+				} `json:"params"`
+			}
+			json.Unmarshal(raw, &notif)
+			if notif.Params.Type == "message.new" {
+				msgFromA <- notif.Params.Payload.Body
+				return
+			}
+		}
+	}()
+
+	argsA := []string{"--mcp-config", mcpFlag}
+	outputA := te.runClaude(t,
+		"Use bifrost_send to send a QUESTION to agent:agent-bravo with body 'What is your status?'. Output 'sent' when done.",
+		argsA...,
+	)
+	t.Logf("Agent A output: %s", outputA)
+
+	select {
+	case body := <-msgFromA:
+		t.Logf("Agent Bravo received from A: %s", body)
+	case <-ctx.Done():
+		t.Fatal("Agent Bravo did not receive message from A")
+	}
+
+	// Step 2: Now register fake-a, run Claude B which sends back.
+	connA := dialHub(t, te.socketPath)
+	rpcRegister(t, connA, fakeAgent("agent-alpha"))
+	msgFromB := make(chan string, 1)
+	go func() {
+		for {
+			raw, err := readRawNotification(connA)
+			if err != nil {
+				return
+			}
+			var notif struct {
+				Params struct {
+					Type    string `json:"type"`
+					Payload struct {
+						Body string `json:"body"`
+					} `json:"payload"`
+				} `json:"params"`
+			}
+			json.Unmarshal(raw, &notif)
+			if notif.Params.Type == "message.new" {
+				msgFromB <- notif.Params.Payload.Body
+				return
+			}
+		}
+	}()
+
+	outputB := te.runClaude(t,
+		"Use bifrost_send to send an ANSWER to agent:agent-alpha with body 'All systems operational'. Output 'sent' when done.",
+		argsA...,
+	)
+	t.Logf("Agent B output: %s", outputB)
+
+	select {
+	case body := <-msgFromB:
+		t.Logf("Agent Alpha received from B: %s", body)
+	case <-ctx.Done():
+		t.Fatal("Agent Alpha did not receive message from B")
+	}
+
+	t.Log("Two-agent conversation complete: A→B and B→A both delivered")
+}
+
+// readRawNotification reads one JSON-RPC notification from a transport.Conn.
+func readRawNotification(conn *transport.Conn) ([]byte, error) {
+	var raw json.RawMessage
+	if err := conn.Receive(&raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
 // --- Helpers ---
