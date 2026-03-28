@@ -252,13 +252,10 @@ func TestManagerHandlePeerDisconnect(t *testing.T) {
 	// Disconnect
 	mgr.handlePeerDisconnect("peer-x")
 
-	// Agent should be unreachable
+	// Agent should be deleted (pruned) on disconnect; it will be re-synced on reconnect.
 	got, _ := s.GetAgent(ctx, "remote-x")
-	if got == nil {
-		t.Fatal("agent not found after disconnect")
-	}
-	if got.Status != protocol.AgentStatusUnreachable {
-		t.Errorf("expected unreachable, got %s", got.Status)
+	if got != nil {
+		t.Fatalf("expected agent to be deleted on disconnect, but it still exists with status %s", got.Status)
 	}
 
 	// Peer should be disconnected

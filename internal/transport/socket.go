@@ -15,15 +15,22 @@ type SocketListener struct {
 }
 
 // NewSocketListener creates a Unix domain socket listener at path.
-// It creates parent directories (mode 0700), removes any stale socket file,
-// starts listening, and chmods the socket to 0600.
+// It creates parent directories (mode 0700), checks that no other hub is
+// already listening on the socket, removes any stale socket file, starts
+// listening, and chmods the socket to 0600.
 func NewSocketListener(path string) (*SocketListener, error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("transport: mkdir %s: %w", dir, err)
 	}
 
-	// Remove stale socket file if present.
+	// Try to connect to the socket. If it succeeds, another hub is running.
+	if c, err := net.Dial("unix", path); err == nil {
+		_ = c.Close()
+		return nil, fmt.Errorf("hub already running on this socket: %s", path)
+	}
+
+	// Connection failed — socket is stale or absent. Remove it and proceed.
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("transport: remove stale socket %s: %w", path, err)
 	}

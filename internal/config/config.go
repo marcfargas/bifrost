@@ -120,8 +120,9 @@ type DirectConfig struct {
 
 // LoggingConfig holds logging settings.
 type LoggingConfig struct {
-	Level string `toml:"level"`
-	File  string `toml:"file"`
+	Level      string `toml:"level"`
+	File       string `toml:"file"`
+	LogMaxSize int64  `toml:"log_max_size"` // bytes; 0 means use default (1 MiB)
 }
 
 // LoadFrom reads the config from the given path.

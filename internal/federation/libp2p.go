@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 
 	"github.com/ipfs/go-cid"
@@ -44,19 +45,55 @@ type Libp2pTransport struct {
 // Libp2pConfig holds configuration for the libp2p transport.
 type Libp2pConfig struct {
 	PrivKey              crypto.PrivKey // persistent identity key for this hub
+	KeyPath              string         // path to persist the identity key; ignored if PrivKey is set
 	Bootstrap            []string       // additional DHT bootstrap peers (multiaddr strings)
 	ListenAddrs          []string       // listen addresses (empty = defaults)
 	Logger               *slog.Logger
 	SkipDefaultBootstrap bool // skip connecting to default IPFS bootstrap peers (for testing)
 }
 
+// loadOrGenerateKey loads a private key from path, or generates a new one and
+// saves it. If path is empty, a fresh ephemeral key is generated.
+func loadOrGenerateKey(path string) (crypto.PrivKey, error) {
+	if path != "" {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			priv, err := crypto.UnmarshalPrivateKey(data)
+			if err != nil {
+				return nil, fmt.Errorf("unmarshal libp2p key from %s: %w", path, err)
+			}
+			return priv, nil
+		}
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("read libp2p key file %s: %w", path, err)
+		}
+	}
+
+	// Key file absent (or no path given) — generate a new one.
+	priv, _, err := crypto.GenerateEd25519Key(nil)
+	if err != nil {
+		return nil, fmt.Errorf("generate identity key: %w", err)
+	}
+
+	if path != "" {
+		data, err := crypto.MarshalPrivateKey(priv)
+		if err != nil {
+			return nil, fmt.Errorf("marshal libp2p key: %w", err)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			return nil, fmt.Errorf("write libp2p key to %s: %w", path, err)
+		}
+	}
+
+	return priv, nil
+}
+
 // NewLibp2pTransport creates a new libp2p federation transport.
 func NewLibp2pTransport(cfg Libp2pConfig) (*Libp2pTransport, error) {
 	if cfg.PrivKey == nil {
-		// Generate a new identity key pair if none provided.
-		priv, _, err := crypto.GenerateEd25519Key(nil)
+		priv, err := loadOrGenerateKey(cfg.KeyPath)
 		if err != nil {
-			return nil, fmt.Errorf("generate identity key: %w", err)
+			return nil, err
 		}
 		cfg.PrivKey = priv
 	}

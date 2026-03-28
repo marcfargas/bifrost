@@ -60,9 +60,18 @@ func NewServer(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 	cm := NewConnManager()
 	h.AddNotifier(cm)
 
+	// Rotate hub.log if it exceeds the configured size threshold.
+	logPath := filepath.Join(dataDir, "hub.log")
+	maxLogSize := cfg.Logging.LogMaxSize
+	if maxLogSize == 0 {
+		maxLogSize = 1048576 // 1 MiB default
+	}
+	if fi, err := os.Stat(logPath); err == nil && fi.Size() > maxLogSize {
+		_ = os.Rename(logPath, logPath+".1")
+	}
+
 	// Open hub.log for append so operational events are persisted regardless
 	// of whether the hub runs in foreground or via autostart.
-	logPath := filepath.Join(dataDir, "hub.log")
 	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("server: open hub.log: %w", err)
@@ -261,8 +270,14 @@ func (s *Server) startFederation(ctx context.Context) error {
 	var libp2pTransport *federation.Libp2pTransport
 
 	if fedCfg.Libp2p.Enabled {
+		dataDir := s.cfg.Storage.DataDir
+		if dataDir == "" {
+			dataDir = config.DataDir()
+		}
+		keyPath := filepath.Join(dataDir, "libp2p.key")
 		lt, err := federation.NewLibp2pTransport(federation.Libp2pConfig{
-			Logger: s.logger,
+			Logger:  s.logger,
+			KeyPath: keyPath,
 		})
 		if err != nil {
 			return fmt.Errorf("federation: create libp2p transport: %w", err)

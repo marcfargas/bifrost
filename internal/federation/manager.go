@@ -765,13 +765,17 @@ func (m *Manager) handlePeerDisconnect(peerID string) {
 	ctx := context.Background()
 	m.store.UpdatePeerStatus(ctx, peerID, protocol.PeerStatusDisconnected, 0)
 
-	// Mark all agents on this peer as unreachable
+	// Delete all agents from this peer — they will be re-synced on reconnect.
 	agents, _ := m.store.ListAgents(ctx, store.AgentFilter{PeerHub: peerID})
 	for _, a := range agents {
-		m.store.UpdateAgentStatus(ctx, a.AgentID, protocol.AgentStatusUnreachable, "")
+		m.store.DeleteAgent(ctx, a.AgentID)
+	}
+	if len(agents) > 0 {
+		// Recompute aliases now that remote agents are gone.
+		m.hub.Agents().RecomputeAliases(ctx)
 	}
 
-	m.logger.Info("peer disconnected", "peer_id", peerID)
+	m.logger.Info("peer disconnected", "peer_id", peerID, "agents_pruned", len(agents))
 }
 
 // heartbeatLoop sends periodic heartbeats to all connected peers.

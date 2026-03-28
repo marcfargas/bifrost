@@ -46,8 +46,9 @@ func Defaults() Config {
 			},
 		},
 		Logging: LoggingConfig{
-			Level: "info",
-			File:  "",
+			Level:      "info",
+			File:       "",
+			LogMaxSize: 1048576, // 1 MiB
 		},
 	}
 }
