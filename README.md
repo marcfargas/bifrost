@@ -42,11 +42,13 @@ Register the MCP server:
 claude mcp add --transport stdio bifrost -- bifrost shim
 ```
 
-Then **always** launch with the channel flag — this is required for real-time message delivery:
+Then **always** launch with the channel flags — required for real-time message delivery:
 
 ```bash
-claude --channels server:bifrost
+claude --dangerously-load-development-channels server:bifrost --channels server:bifrost
 ```
+
+> **Note:** The `--dangerously-load-development-channels` flag is required for `server:` channels during development. Once bifrost is published to the Claude plugin marketplace, the simpler `claude --channels plugin:bifrost` will work without it.
 
 Without `--channels`, the MCP tools work but push notifications (incoming messages, task requests, status updates) are silently dropped. The channel flag is what makes bifrost actually useful.
 
