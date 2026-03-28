@@ -289,10 +289,9 @@ func doMCPPost(t *testing.T, baseURL, sessionID string, body []byte) ([]byte, st
 // "data:" line. Returns nil if no data line is found.
 func extractSSEData(raw []byte) []byte {
 	text := string(raw)
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		line = strings.TrimRight(line, "\r")
-		if strings.HasPrefix(line, "data: ") {
-			payload := strings.TrimPrefix(line, "data: ")
+		if payload, ok := strings.CutPrefix(line, "data: "); ok {
 			payload = strings.TrimSpace(payload)
 			if payload != "" {
 				return []byte(payload)
