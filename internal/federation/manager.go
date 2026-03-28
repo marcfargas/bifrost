@@ -557,7 +557,7 @@ func (m *Manager) handlePeerMessage(ctx context.Context, peerID string, env *pro
 	}
 
 	status := m.hub.NotifyAgent(agent.AgentID, core.Notification{
-		Type:    "message",
+		Type:    "message.new",
 		Payload: msg,
 	})
 	if status == protocol.DeliveryStatusQueuedOffline {

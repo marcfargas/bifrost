@@ -154,10 +154,10 @@ func (m *hubMux) routeResponse(resp hub.RPCResponse) {
 }
 
 // notificationWriter can write raw JSON-RPC notification messages to the MCP
-// stdio output. It wraps an io.Writer with synchronization.
+// stdio output. The underlying io.Writer must already be safe for concurrent
+// use (e.g. a lockedWriter shared with the MCP transport).
 type notificationWriter struct {
-	mu sync.Mutex
-	w  io.Writer
+	w io.Writer
 }
 
 // writeNotification sends a raw JSON-RPC notification to the MCP client via
@@ -176,8 +176,6 @@ func (nw *notificationWriter) writeNotification(method string, params any) error
 
 	data = append(data, '\n')
 
-	nw.mu.Lock()
-	defer nw.mu.Unlock()
 	_, err = nw.w.Write(data)
 	return err
 }
@@ -247,7 +245,10 @@ func listenHubNotifications(ctx context.Context, mux *hubMux, nw *notificationWr
 				}
 			case "agent.registered":
 				var agent protocol.Agent
-				json.Unmarshal(envelope.Payload, &agent)
+				if err := json.Unmarshal(envelope.Payload, &agent); err != nil {
+					log.Warn("unmarshal agent.registered payload failed", "error", err)
+					continue
+				}
 				name := agent.ProjectName
 				if agent.DisplayName != "" {
 					name = agent.DisplayName
@@ -257,13 +258,19 @@ func listenHubNotifications(ctx context.Context, mux *hubMux, nw *notificationWr
 				cp.Meta["event"] = "agent_joined"
 			case "agent.deregistered":
 				var info map[string]string
-				json.Unmarshal(envelope.Payload, &info)
+				if err := json.Unmarshal(envelope.Payload, &info); err != nil {
+					log.Warn("unmarshal agent.deregistered payload failed", "error", err)
+					continue
+				}
 				cp.Message = fmt.Sprintf("Agent %s has left", info["agent_id"])
 				cp.Meta["agent"] = info["agent_id"]
 				cp.Meta["event"] = "agent_left"
 			case "task_requested":
 				var task protocol.Task
-				json.Unmarshal(envelope.Payload, &task)
+				if err := json.Unmarshal(envelope.Payload, &task); err != nil {
+					log.Warn("unmarshal task_requested payload failed", "error", err)
+					continue
+				}
 				cp.Message = fmt.Sprintf("Task requested: %s\n%s", task.Title, task.Description)
 				cp.Meta["event"] = "task_requested"
 				cp.Meta["task_id"] = task.TaskID
@@ -272,7 +279,10 @@ func listenHubNotifications(ctx context.Context, mux *hubMux, nw *notificationWr
 				cp.Meta["assignee"] = task.Assignee
 			case "task_updated":
 				var task protocol.Task
-				json.Unmarshal(envelope.Payload, &task)
+				if err := json.Unmarshal(envelope.Payload, &task); err != nil {
+					log.Warn("unmarshal task_updated payload failed", "error", err)
+					continue
+				}
 				cp.Message = fmt.Sprintf("Task %s updated: status=%s", task.TaskID, task.Status)
 				cp.Meta["event"] = "task_updated"
 				cp.Meta["task_id"] = task.TaskID

@@ -10,8 +10,8 @@ import (
 
 // ChannelInfo describes a channel and its current subscriber count.
 type ChannelInfo struct {
-	Name            string
-	SubscriberCount int
+	Name            string `json:"name"`
+	SubscriberCount int    `json:"subscriber_count"`
 }
 
 // ChannelManager handles channel subscription lifecycle.

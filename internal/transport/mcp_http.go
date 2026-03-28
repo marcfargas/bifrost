@@ -165,13 +165,15 @@ func (t *MCPHTTPTransport) Notify(agentID string, notification core.Notification
 	if !ok {
 		return false
 	}
-	t.logger.Debug("MCP HTTP notification",
+	t.logger.Debug("MCP HTTP notification (not yet delivered — SSE push not implemented)",
 		"agent_id", agentID,
 		"session_id", sid,
 		"type", notification.Type,
 	)
+	// SSE push is not yet implemented; return false so the message is
+	// correctly queued as offline rather than silently dropped.
 	// TODO(P4-T2): push notification via SSE to the MCP session.
-	return true
+	return false
 }
 
 // newSessionServer creates a fresh MCP Server instance for a new HTTP session.

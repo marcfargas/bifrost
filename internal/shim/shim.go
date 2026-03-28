@@ -6,14 +6,37 @@ package shim
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/marcfargas/bifrost/pkg/detect"
 	"github.com/marcfargas/bifrost/pkg/protocol"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// lockedWriter wraps an io.Writer with a mutex so that multiple goroutines
+// (the MCP SDK transport and the notificationWriter) can safely share a single
+// output stream (os.Stdout).
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (lw *lockedWriter) Write(p []byte) (int, error) {
+	lw.mu.Lock()
+	defer lw.mu.Unlock()
+	return lw.w.Write(p)
+}
+
+// lockedWriteCloser adapts a lockedWriter to io.WriteCloser (Close is a no-op).
+type lockedWriteCloser struct {
+	*lockedWriter
+}
+
+func (lockedWriteCloser) Close() error { return nil }
 
 // Options configures the shim entry point.
 type Options struct {
@@ -116,8 +139,10 @@ func Run(ctx context.Context, opts Options) error {
 		},
 	)
 
-	// 8. Set up notification writer (writes raw JSON-RPC to stdout).
-	nw := &notificationWriter{w: os.Stdout}
+	// 8. Set up a shared locked writer for stdout so the MCP SDK transport
+	// and our notification writer don't interleave output.
+	sharedOut := &lockedWriter{w: os.Stdout}
+	nw := &notificationWriter{w: sharedOut}
 
 	globalDND.interval = 5 * time.Minute
 	registerTools(server, mux, agent, nw)
@@ -141,7 +166,12 @@ func Run(ctx context.Context, opts Options) error {
 	}()
 
 	// 12. Run MCP server over stdio (blocks until stdin closes).
-	return server.Run(ctx, &mcp.StdioTransport{})
+	// Use IOTransport instead of StdioTransport so that stdout writes go
+	// through the same lockedWriter that notificationWriter uses.
+	return server.Run(ctx, &mcp.IOTransport{
+		Reader: os.Stdin,
+		Writer: lockedWriteCloser{sharedOut},
+	})
 }
 
 // runHeartbeat sends periodic heartbeat RPCs to the hub.

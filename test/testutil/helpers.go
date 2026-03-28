@@ -78,7 +78,7 @@ func (c *CollectingNotifier) MessagesFor(agentID string) []*protocol.Message {
 	defer c.mu.Unlock()
 	var msgs []*protocol.Message
 	for _, notif := range c.notifications[agentID] {
-		if notif.Type != "message.new" && notif.Type != "message" {
+		if notif.Type != "message.new" {
 			continue
 		}
 		if msg, ok := notif.Payload.(*protocol.Message); ok {
