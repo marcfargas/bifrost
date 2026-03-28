@@ -131,25 +131,37 @@ func (m *cliMux) readLoop(_ context.Context) {
 
 // printAgentTable prints agents as a formatted table.
 func printAgentTable(agents []protocol.Agent) {
-	fmt.Printf("%-20s  %-10s  %-30s  %s\n", "NAME", "STATUS", "PROJECT", "AGENT ID")
-	fmt.Printf("%-20s  %-10s  %-30s  %s\n",
-		strings.Repeat("-", 20),
+	fmt.Printf("%-22s  %-10s  %-20s  %-15s  %s\n", "NAME", "STATUS", "PROJECT", "HOST", "HUB")
+	fmt.Printf("%-22s  %-10s  %-20s  %-15s  %s\n",
+		strings.Repeat("-", 22),
 		strings.Repeat("-", 10),
-		strings.Repeat("-", 30),
-		strings.Repeat("-", 36),
+		strings.Repeat("-", 20),
+		strings.Repeat("-", 15),
+		strings.Repeat("-", 10),
 	)
 	for _, a := range agents {
 		name := a.DisplayName
 		if name == "" {
 			name = a.AgentID
 		}
+		if len(name) > 22 {
+			name = name[:19] + "..."
+		}
 		project := a.ProjectName
-		if len(project) > 30 {
-			project = project[:27] + "..."
+		if len(project) > 20 {
+			project = project[:17] + "..."
 		}
-		if len(name) > 20 {
-			name = name[:17] + "..."
+		host := a.Hostname
+		if len(host) > 15 {
+			host = host[:12] + "..."
 		}
-		fmt.Printf("%-20s  %-10s  %-30s  %s\n", name, string(a.Status), project, a.AgentID)
+		hub := "local"
+		if a.PeerHub != "" {
+			hub = a.PeerHub
+			if len(hub) > 10 {
+				hub = hub[:7] + "..."
+			}
+		}
+		fmt.Printf("%-22s  %-10s  %-20s  %-15s  %s\n", name, string(a.Status), project, host, hub)
 	}
 }
