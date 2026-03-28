@@ -239,8 +239,18 @@ func (s *Server) acceptLoop(ctx context.Context) {
 
 // handleConnection reads RPCRequests in a loop, dispatches to the handler, and
 // writes responses back. Returns when the connection is closed or an error occurs.
+// It also watches the context so that server shutdown can interrupt blocked reads
+// (necessary on Windows where closing the client side of a Unix socket may not
+// immediately unblock the server-side read).
 func (s *Server) handleConnection(ctx context.Context, conn *transport.Conn) {
 	defer conn.Close()
+
+	// Close the connection when context is cancelled to unblock Receive.
+	go func() {
+		<-ctx.Done()
+		conn.Close()
+	}()
+
 	for {
 		var req RPCRequest
 		if err := conn.Receive(&req); err != nil {

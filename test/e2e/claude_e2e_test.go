@@ -1,7 +1,9 @@
 //go:build e2e
 
-// Package e2e contains end-to-end tests that require external binaries
-// (bifrost, claude CLI) and network access. These tests are not run in CI.
+// This file contains E2E tests that require external binaries (claude CLI)
+// and an ANTHROPIC_API_KEY. These tests are behind the "e2e" build tag
+// and are NOT run in CI. For CI E2E tests, see local_test.go and
+// federation_e2e_test.go (no build tag required).
 package e2e
 
 import (
