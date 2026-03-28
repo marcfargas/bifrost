@@ -580,6 +580,16 @@ func (s *SQLiteStore) TouchConversation(ctx context.Context, conversationID stri
 	return err
 }
 
+// SetLastActivity sets the last_activity column for a conversation to an arbitrary
+// time. This is intentionally not on the Store interface — it is only used by
+// tests that need to back-date activity to trigger CloseStale.
+func (s *SQLiteStore) SetLastActivity(ctx context.Context, conversationID string, t time.Time) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET last_activity = ? WHERE conversation_id = ?`,
+		fmtTime(t), conversationID)
+	return err
+}
+
 func (s *SQLiteStore) ListStaleConversations(ctx context.Context, before time.Time) ([]*protocol.Conversation, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT conversation_id, participants, task_id, created_at, last_activity, closed, closed_reason

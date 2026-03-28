@@ -32,10 +32,17 @@ func saveStaleConversation(t *testing.T, s store.Store, convID string, lastActiv
 		ConversationID: convID,
 		Participants:   []string{"agent-a", "agent-b"},
 		CreatedAt:      lastActivity,
-		LastActivity:   lastActivity,
 	}
 	if err := s.SaveConversation(ctx, conv); err != nil {
 		t.Fatalf("saveStaleConversation %s: %v", convID, err)
+	}
+	// SaveConversation sets last_activity = now. Back-date it so CloseStale sees it as stale.
+	sq, ok := s.(*store.SQLiteStore)
+	if !ok {
+		t.Fatalf("saveStaleConversation: store is not *store.SQLiteStore")
+	}
+	if err := sq.SetLastActivity(ctx, convID, lastActivity); err != nil {
+		t.Fatalf("saveStaleConversation SetLastActivity %s: %v", convID, err)
 	}
 	return conv
 }
@@ -172,7 +179,6 @@ func TestListConversationsActiveOnly(t *testing.T) {
 		ConversationID: "conv-list-open",
 		Participants:   []string{"a", "b"},
 		CreatedAt:      now,
-		LastActivity:   now,
 		Closed:         false,
 	}
 	if err := hub.store.SaveConversation(ctx, openConv); err != nil {
@@ -184,7 +190,6 @@ func TestListConversationsActiveOnly(t *testing.T) {
 		ConversationID: "conv-list-closed",
 		Participants:   []string{"a", "b"},
 		CreatedAt:      now,
-		LastActivity:   now,
 		Closed:         false,
 	}
 	if err := hub.store.SaveConversation(ctx, closedConv); err != nil {

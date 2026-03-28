@@ -116,10 +116,18 @@ func TestConversationAutoCloseWithTask(t *testing.T) {
 		CreatedAt:      conv.CreatedAt,
 		Closed:         false,
 	}
-	// Use the store's TouchConversation to push the last_activity into the past
-	// via a direct SQL exec on the underlying SQLite store.
+	// UpdateConversation sets last_activity = now. After saving, back-date
+	// last_activity via the concrete SQLiteStore so CloseStale sees it as stale.
 	if err := hub.Store().UpdateConversation(ctx, backdated); err != nil {
 		t.Fatalf("backdate conversation: %v", err)
+	}
+	sq, ok := hub.Store().(*store.SQLiteStore)
+	if !ok {
+		t.Fatalf("store is not *store.SQLiteStore")
+	}
+	staleTime := time.Now().Add(-20 * time.Minute)
+	if err := sq.SetLastActivity(ctx, conv.ConversationID, staleTime); err != nil {
+		t.Fatalf("SetLastActivity: %v", err)
 	}
 
 	// Now CloseStale should close this conversation.
