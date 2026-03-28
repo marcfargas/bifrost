@@ -72,8 +72,8 @@ func TestConversationAutoCloseWithTask(t *testing.T) {
 	if conv.Closed {
 		t.Error("conversation should be open after task creation")
 	}
-	if conv.TaskID != task.TaskID {
-		t.Errorf("conversation TaskID = %q, want %q", conv.TaskID, task.TaskID)
+	if !conv.IsTask {
+		t.Errorf("conversation IsTask = false, want true after task creation")
 	}
 
 	// Complete the task lifecycle.
@@ -112,11 +112,12 @@ func TestConversationAutoCloseWithTask(t *testing.T) {
 	backdated := &protocol.Conversation{
 		ConversationID: conv.ConversationID,
 		Participants:   conv.Participants,
-		TaskID:         conv.TaskID,
+		IsTask:         conv.IsTask,
 		CreatedAt:      conv.CreatedAt,
-		LastActivity:   time.Now().Add(-20 * time.Minute), // older than 10-minute timeout
 		Closed:         false,
 	}
+	// Use the store's TouchConversation to push the last_activity into the past
+	// via a direct SQL exec on the underlying SQLite store.
 	if err := hub.Store().UpdateConversation(ctx, backdated); err != nil {
 		t.Fatalf("backdate conversation: %v", err)
 	}

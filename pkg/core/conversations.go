@@ -67,8 +67,8 @@ func (m *ConversationManager) Get(ctx context.Context, convID string) (*protocol
 	return conv, nil
 }
 
-// LinkToTask associates a conversation with a task by updating the stored record.
-func (m *ConversationManager) LinkToTask(ctx context.Context, convID, taskID string) error {
+// LinkToTask marks a conversation as a task conversation by setting IsTask=true.
+func (m *ConversationManager) LinkToTask(ctx context.Context, convID, _ string) error {
 	conv, err := m.store.GetConversation(ctx, convID)
 	if err != nil {
 		return fmt.Errorf("conversations: get %s: %w", convID, err)
@@ -76,7 +76,7 @@ func (m *ConversationManager) LinkToTask(ctx context.Context, convID, taskID str
 	if conv == nil {
 		return fmt.Errorf("conversations: not found: %s", convID)
 	}
-	conv.TaskID = taskID
+	conv.IsTask = true
 	if err := m.store.UpdateConversation(ctx, conv); err != nil {
 		return fmt.Errorf("conversations: update %s: %w", convID, err)
 	}

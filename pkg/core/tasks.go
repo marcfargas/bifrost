@@ -66,9 +66,8 @@ func (m *TaskManager) CreateTask(ctx context.Context, requesterID, assigneeAddr,
 	conv := &protocol.Conversation{
 		ConversationID: convID,
 		Participants:   []string{requesterID, assignee.AgentID},
-		TaskID:         taskID,
+		IsTask:         true,
 		CreatedAt:      now,
-		LastActivity:   now,
 	}
 	if err := m.store.SaveConversation(ctx, conv); err != nil {
 		return nil, fmt.Errorf("tasks: save conversation: %w", err)

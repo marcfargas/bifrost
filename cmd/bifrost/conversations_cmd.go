@@ -55,27 +55,24 @@ func listConversations() error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(w, "ID\tPARTICIPANTS\tTASK\tLAST ACTIVITY\tCLOSED\n")
+	fmt.Fprintf(w, "ID\tPARTICIPANTS\tTASK\tCLOSED\n")
 	for _, c := range convs {
 		participants := strings.Join(c.Participants, ", ")
 		if len(participants) > 30 {
 			participants = participants[:27] + "..."
 		}
-		taskID := c.TaskID
-		if taskID == "" {
-			taskID = "-"
-		} else {
-			taskID = truncateID(taskID, 16)
+		isTask := "no"
+		if c.IsTask {
+			isTask = "yes"
 		}
 		closed := "no"
 		if c.Closed {
 			closed = "yes"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
 			truncateID(c.ConversationID, 16),
 			participants,
-			taskID,
-			c.LastActivity.Format("2006-01-02 15:04:05"),
+			isTask,
 			closed,
 		)
 	}

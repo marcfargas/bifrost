@@ -203,7 +203,6 @@ func (r *MessageRouter) getOrCreateConversation(ctx context.Context, msg *protoc
 		ConversationID: shortID(),
 		Participants:   []string{msg.From, msg.To},
 		CreatedAt:      now,
-		LastActivity:   now,
 	}
 	if err := r.store.SaveConversation(ctx, conv); err != nil {
 		return nil, err

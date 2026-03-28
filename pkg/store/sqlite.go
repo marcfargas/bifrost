@@ -485,12 +485,16 @@ func (s *SQLiteStore) SaveConversation(ctx context.Context, conv *protocol.Conve
 	if err != nil {
 		return err
 	}
+	taskID := ""
+	if conv.IsTask {
+		taskID = conv.ConversationID // sentinel: IsTask conversations store their own ID
+	}
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO conversations
     (conversation_id, participants, task_id, created_at, last_activity, closed, closed_reason)
 VALUES (?,?,?,?,?,?,?)`,
-		conv.ConversationID, parts, conv.TaskID,
-		fmtTime(conv.CreatedAt), fmtTime(conv.LastActivity),
+		conv.ConversationID, parts, taskID,
+		fmtTime(conv.CreatedAt), fmtTime(time.Now()),
 		boolInt(conv.Closed), string(conv.ClosedReason),
 	)
 	return err
@@ -546,12 +550,16 @@ func (s *SQLiteStore) UpdateConversation(ctx context.Context, conv *protocol.Con
 	if err != nil {
 		return err
 	}
+	taskID := ""
+	if conv.IsTask {
+		taskID = conv.ConversationID
+	}
 	_, err = s.db.ExecContext(ctx, `
 UPDATE conversations
 SET participants = ?, task_id = ?, last_activity = ?, closed = ?, closed_reason = ?
 WHERE conversation_id = ?`,
-		parts, conv.TaskID,
-		fmtTime(conv.LastActivity),
+		parts, taskID,
+		fmtTime(time.Now()),
 		boolInt(conv.Closed), string(conv.ClosedReason),
 		conv.ConversationID,
 	)
@@ -593,10 +601,10 @@ func (s *SQLiteStore) DeleteConversationsBefore(ctx context.Context, before time
 
 func scanConversation(row *sql.Row) (*protocol.Conversation, error) {
 	var c protocol.Conversation
-	var partsRaw, createdAt, lastActivity string
+	var partsRaw, createdAt, lastActivity, taskID string
 	var closed int
 	err := row.Scan(
-		&c.ConversationID, &partsRaw, &c.TaskID,
+		&c.ConversationID, &partsRaw, &taskID,
 		&createdAt, &lastActivity, &closed, &c.ClosedReason,
 	)
 	if err == sql.ErrNoRows {
@@ -605,6 +613,7 @@ func scanConversation(row *sql.Row) (*protocol.Conversation, error) {
 	if err != nil {
 		return nil, err
 	}
+	c.IsTask = taskID != ""
 	c.Closed = closed == 1
 	if err := fromJSON(partsRaw, &c.Participants); err != nil {
 		return nil, err
@@ -612,7 +621,8 @@ func scanConversation(row *sql.Row) (*protocol.Conversation, error) {
 	if c.CreatedAt, err = parseTime(createdAt); err != nil {
 		return nil, err
 	}
-	if c.LastActivity, err = parseTime(lastActivity); err != nil {
+	// lastActivity is no longer part of the struct; discard after parsing.
+	if _, err = parseTime(lastActivity); err != nil {
 		return nil, err
 	}
 	return &c, nil
@@ -622,14 +632,15 @@ func scanConversations(rows *sql.Rows) ([]*protocol.Conversation, error) {
 	var convs []*protocol.Conversation
 	for rows.Next() {
 		var c protocol.Conversation
-		var partsRaw, createdAt, lastActivity string
+		var partsRaw, createdAt, lastActivity, taskID string
 		var closed int
 		if err := rows.Scan(
-			&c.ConversationID, &partsRaw, &c.TaskID,
+			&c.ConversationID, &partsRaw, &taskID,
 			&createdAt, &lastActivity, &closed, &c.ClosedReason,
 		); err != nil {
 			return nil, err
 		}
+		c.IsTask = taskID != ""
 		c.Closed = closed == 1
 		if err := fromJSON(partsRaw, &c.Participants); err != nil {
 			return nil, err
@@ -638,7 +649,8 @@ func scanConversations(rows *sql.Rows) ([]*protocol.Conversation, error) {
 		if c.CreatedAt, err = parseTime(createdAt); err != nil {
 			return nil, err
 		}
-		if c.LastActivity, err = parseTime(lastActivity); err != nil {
+		// lastActivity is no longer part of the struct; discard after parsing.
+		if _, err = parseTime(lastActivity); err != nil {
 			return nil, err
 		}
 		convs = append(convs, &c)

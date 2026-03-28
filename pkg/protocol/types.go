@@ -99,13 +99,16 @@ type Message struct {
 	NoReply        bool        `json:"no_reply,omitempty"`
 }
 
-// Conversation groups related messages between participants.
+// Conversation groups events between participants.
+// Tasks are conversations with IsTask=true.
 type Conversation struct {
 	ConversationID string                  `json:"conversation_id"`
 	Participants   []string                `json:"participants"`
-	TaskID         string                  `json:"task_id,omitempty"`
+	IsTask         bool                    `json:"is_task"`
+	Title          string                  `json:"title,omitempty"`
+	Assignee       string                  `json:"assignee,omitempty"`
+	Requester      string                  `json:"requester,omitempty"`
 	CreatedAt      time.Time               `json:"created_at"`
-	LastActivity   time.Time               `json:"last_activity"`
 	Closed         bool                    `json:"closed"`
 	ClosedReason   ConversationCloseReason `json:"closed_reason,omitempty"`
 }
@@ -216,6 +219,96 @@ type PeerAgentStatusPayload struct {
 // PeerHeartbeatPayload is sent periodically to confirm liveness.
 type PeerHeartbeatPayload struct {
 	Timestamp time.Time `json:"timestamp"`
+}
+
+// EventType classifies what happened in a conversation.
+type EventType string
+
+const (
+	EventTypeMessage            EventType = "message"
+	EventTypeStatus             EventType = "status"
+	EventTypeMetadata           EventType = "metadata"
+	EventTypeFile               EventType = "file"
+	EventTypeParticipantAdded   EventType = "participant.added"
+	EventTypeParticipantRemoved EventType = "participant.removed"
+)
+
+// MaxFileSizeBytes is the maximum inline file size for file events.
+const MaxFileSizeBytes = 256 * 1024 // 256KB
+
+// Event is a single occurrence in a conversation stream.
+type Event struct {
+	ID             string    `json:"id"`
+	ConversationID string    `json:"conversation_id"`
+	Type           EventType `json:"type"`
+	FromAgent      string    `json:"from_agent"`
+	Data           EventData `json:"data"`
+	Timestamp      time.Time `json:"timestamp"`
+}
+
+// EventData is the polymorphic payload of an Event. Fields are populated
+// based on the event type; unused fields are zero-valued.
+type EventData struct {
+	// message event
+	Body        string      `json:"body,omitempty"`
+	MessageType MessageType `json:"message_type,omitempty"`
+	Priority    Priority    `json:"priority,omitempty"`
+	InReplyTo   string      `json:"in_reply_to,omitempty"`
+
+	// status event
+	NewStatus TaskStatus `json:"new_status,omitempty"`
+	Summary   string     `json:"summary,omitempty"`
+	Reason    string     `json:"reason,omitempty"`
+
+	// metadata event
+	Field string `json:"field,omitempty"`
+	Value string `json:"value,omitempty"`
+
+	// file event
+	Filename    string `json:"filename,omitempty"`
+	Size        int64  `json:"size,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+	Content     []byte `json:"content,omitempty"` // base64 via json.Marshal, max 256KB
+
+	// participant.added / participant.removed
+	AgentID string `json:"agent_id,omitempty"`
+}
+
+// ConvMeta carries conversation metadata for federation sync.
+type ConvMeta struct {
+	ID           string    `json:"id"`
+	Participants []string  `json:"participants"`
+	IsTask       bool      `json:"is_task"`
+	Title        string    `json:"title,omitempty"`
+	Assignee     string    `json:"assignee,omitempty"`
+	Requester    string    `json:"requester,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// PeerConversationSyncPayload is sent via peer.conversation_sync.
+type PeerConversationSyncPayload struct {
+	Conversation ConvMeta `json:"conversation"`
+	Events       []*Event `json:"events"`
+}
+
+// PeerConversationSyncAck acknowledges a peer.conversation_sync.
+type PeerConversationSyncAck struct {
+	ConversationID string `json:"conversation_id"`
+	LastEventID    string `json:"last_event_id"`
+}
+
+// TaskView is a read projection of a task conversation derived from events.
+// It is never persisted — it is computed on demand by the sync engine.
+type TaskView struct {
+	ConversationID string     `json:"conversation_id"`
+	Title          string     `json:"title"`
+	Assignee       string     `json:"assignee"`
+	Requester      string     `json:"requester"`
+	Status         TaskStatus `json:"status"`
+	Summary        string     `json:"summary,omitempty"`
+	Reason         string     `json:"reason,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 // PeerResponse is the acknowledgement sent in reply to a peer envelope.
