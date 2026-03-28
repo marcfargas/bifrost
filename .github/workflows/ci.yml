@@ -78,7 +78,7 @@ jobs:
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
     env:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_AUTH_TOKEN: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
 
     steps:
       - uses: actions/checkout@v4
@@ -92,9 +92,9 @@ jobs:
           echo "$PWD" >> "$GITHUB_PATH"
 
       - name: Install Claude Code
-        if: env.ANTHROPIC_API_KEY != ''
+        if: env.ANTHROPIC_AUTH_TOKEN != ''
         run: npm install -g @anthropic-ai/claude-code
 
       - name: Run Claude E2E tests
-        if: env.ANTHROPIC_API_KEY != ''
+        if: env.ANTHROPIC_AUTH_TOKEN != ''
         run: go test -tags e2e ./test/e2e/ -v -timeout 120s -run TestClaude
