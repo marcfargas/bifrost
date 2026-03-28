@@ -62,7 +62,7 @@ func readRPCRequest(t *testing.T, conn net.Conn) hub.RPCRequest {
 // TestHubMux_DisconnectSignal verifies that readLoop closes the disconnected
 // channel when the remote end of the connection closes.
 func TestHubMux_DisconnectSignal(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	client, server := pipeConn(t)
@@ -87,7 +87,7 @@ func TestHubMux_DisconnectSignal(t *testing.T) {
 // TestHubMux_DrainPending verifies that in-flight rpcCall waiters receive an
 // error response when the connection drops.
 func TestHubMux_DrainPending(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	client, server := pipeConn(t)
@@ -147,7 +147,7 @@ func TestHubMux_ReconnectBackoff(t *testing.T) {
 // TestRunReconnect_ReconnectsOnDrop verifies that runReconnect swaps in a new
 // connection and emits a "reconnected" notification after a drop.
 func TestRunReconnect_ReconnectsOnDrop(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	// First connection (will be dropped).
@@ -241,7 +241,7 @@ func TestRunReconnect_ReconnectsOnDrop(t *testing.T) {
 }
 
 // makeTestAgent builds a minimal *protocol.Agent for use in tests.
-func makeTestAgent() interface{} {
+func makeTestAgent() any {
 	return map[string]string{
 		"agent_id":     "test-agent",
 		"display_name": "Test Agent",
