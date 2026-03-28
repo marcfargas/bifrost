@@ -45,12 +45,28 @@ type Options struct {
 	ProjectDir  string
 }
 
-const mcpInstructions = `Messages from other agents arrive as <channel source="bifrost" ...>.
-Use bifrost_send to reply — set the "to" field to the agent name from the "from" attribute.
-Address agents by name. If the name is ambiguous, the tool will list available agents — pick the right one and retry.
-Addressing: use "agent:name" for agents, "channel:name" for broadcast channels, "task:id" for task-scoped messages.
-When you receive a task request (type="task_requested"), review it carefully. If you need clarification, send a QUESTION message before accepting.
-Use bifrost_dnd to enable Do Not Disturb when you need focus time.`
+const mcpInstructions = `Bifrost connects you to other Claude Code agents running in different projects.
+
+MESSAGES: Use bifrost_send for quick questions, context sharing, and status updates.
+Messages from other agents arrive as <channel source="bifrost" from="..." type="..." ...>.
+Reply with bifrost_send — set "to" to the agent name from the "from" attribute.
+Address agents by name (e.g. "agent:api-backend"). If ambiguous, the tool lists available agents.
+
+TASKS: Use bifrost_create_task when asking another agent to DO WORK (implement a feature,
+fix a bug, run tests, deploy, etc). Tasks have a lifecycle:
+  1. You create a task with bifrost_create_task (assignee, title, description)
+  2. The assignee receives it and can ask clarifying questions via bifrost_send
+  3. The assignee accepts with bifrost_update_task (status: "accepted")
+  4. The assignee works, updates progress (status: "in_progress")
+  5. The assignee completes (status: "completed", summary) or rejects/fails
+  6. You get notified of each status change
+
+Use bifrost_send for CONVERSATION. Use bifrost_create_task for WORK REQUESTS.
+If another agent asks you to implement something via bifrost_send, suggest they
+create a task instead so the work is tracked.
+
+CHANNELS: Subscribe to broadcast topics with bifrost_subscribe (e.g. "channel:deploys").
+DND: Use bifrost_dnd to pause incoming messages when you need focus.`
 
 // Run starts the shim: connects to the hub, registers, serves MCP tools over
 // stdio, and forwards hub notifications to Claude Code. It blocks until stdin

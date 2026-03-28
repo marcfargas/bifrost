@@ -79,12 +79,13 @@ func registerWhoAmI(server *mcp.Server, agent *protocol.Agent) {
 // registerSend registers the bifrost_send tool.
 func registerSend(server *mcp.Server, mux *hubMux, agent *protocol.Agent) {
 	type sendArgs struct {
-		To        string `json:"to" jsonschema:"recipient address: agent:name, channel:name, or task:id"`
-		Body      string `json:"body" jsonschema:"message body text"`
-		Type      string `json:"type,omitempty" jsonschema:"message type: QUESTION, ANSWER, CONTEXT, STATUS, ERROR (default ANSWER)"`
-		Subject   string `json:"subject,omitempty" jsonschema:"optional message subject line"`
-		Priority  string `json:"priority,omitempty" jsonschema:"message priority: low, normal, urgent (default normal)"`
-		InReplyTo string `json:"in_reply_to,omitempty" jsonschema:"optional message ID this replies to"`
+		To             string `json:"to" jsonschema:"recipient address: agent:name, channel:name, or task:id"`
+		Body           string `json:"body" jsonschema:"message body text"`
+		Type           string `json:"type,omitempty" jsonschema:"message type: QUESTION, ANSWER, CONTEXT, STATUS, ERROR (default ANSWER)"`
+		Subject        string `json:"subject,omitempty" jsonschema:"optional message subject line"`
+		Priority       string `json:"priority,omitempty" jsonschema:"message priority: low, normal, urgent (default normal)"`
+		InReplyTo      string `json:"in_reply_to,omitempty" jsonschema:"optional message ID this replies to"`
+		ConversationID string `json:"conversation_id,omitempty" jsonschema:"optional conversation ID to continue an existing conversation"`
 	}
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -101,14 +102,15 @@ func registerSend(server *mcp.Server, mux *hubMux, agent *protocol.Agent) {
 		}
 
 		msg := protocol.Message{
-			ID:        protocol.NewID(),
-			From:      agent.AgentID,
-			To:        args.To,
-			Body:      args.Body,
-			Type:      protocol.MessageType(strings.ToUpper(msgType)),
-			Subject:   args.Subject,
-			Priority:  protocol.Priority(priority),
-			InReplyTo: args.InReplyTo,
+			ID:             protocol.NewID(),
+			ConversationID: args.ConversationID,
+			From:           agent.AgentID,
+			To:             args.To,
+			Body:           args.Body,
+			Type:           protocol.MessageType(strings.ToUpper(msgType)),
+			Subject:        args.Subject,
+			Priority:       protocol.Priority(priority),
+			InReplyTo:      args.InReplyTo,
 		}
 
 		resp, err := mux.rpcCall(ctx, "msg.send", msg)
