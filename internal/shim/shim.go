@@ -112,17 +112,10 @@ func Run(ctx context.Context, opts Options) error {
 	// 5. Start the hub connection multiplexer.
 	mux := newHubMux(ctx, hubConn, log)
 
-	// 6. Register with hub.
-	resp, err := mux.rpcCall(ctx, "hub.register", agent)
-	if err != nil {
-		return fmt.Errorf("hub.register call: %w", err)
-	}
-	if resp.Error != nil {
-		return fmt.Errorf("hub.register error: %s", resp.Error.Message)
-	}
-	log.Info("registered with hub", "agent_id", agentID)
-
-	// 7. Create MCP server with tools and capabilities.
+	// 6. Create MCP server with tools and capabilities.
+	// Registration with the hub happens AFTER the MCP server starts, so that
+	// the ping notification (and any early messages) arrive when the notification
+	// writer is ready to emit them via the MCP transport.
 	server := mcp.NewServer(
 		&mcp.Implementation{
 			Name:    "bifrost-shim",
@@ -139,7 +132,7 @@ func Run(ctx context.Context, opts Options) error {
 		},
 	)
 
-	// 8. Set up a shared locked writer for stdout so the MCP SDK transport
+	// 7. Set up a shared locked writer for stdout so the MCP SDK transport
 	// and our notification writer don't interleave output.
 	sharedOut := &lockedWriter{w: os.Stdout}
 	nw := &notificationWriter{w: sharedOut}
@@ -147,17 +140,12 @@ func Run(ctx context.Context, opts Options) error {
 	globalDND.interval = 5 * time.Minute
 	registerTools(server, mux, agent, nw)
 
-	// 9. Start listening for hub notifications in background.
+	// 8. Start listening for hub notifications in background.
 	notifCtx, notifCancel := context.WithCancel(ctx)
 	defer notifCancel()
 	go listenHubNotifications(notifCtx, mux, nw, log)
 
-	// 10. Start heartbeat goroutine.
-	heartbeatCtx, heartbeatCancel := context.WithCancel(ctx)
-	defer heartbeatCancel()
-	go runHeartbeat(heartbeatCtx, mux, agentID, log)
-
-	// 11. Deregister on shutdown.
+	// 9. Deregister on shutdown.
 	defer func() {
 		deregCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -165,13 +153,38 @@ func Run(ctx context.Context, opts Options) error {
 		log.Info("deregistered from hub", "agent_id", agentID)
 	}()
 
-	// 12. Run MCP server over stdio (blocks until stdin closes).
-	// Use IOTransport instead of StdioTransport so that stdout writes go
-	// through the same lockedWriter that notificationWriter uses.
-	return server.Run(ctx, &mcp.IOTransport{
-		Reader: os.Stdin,
-		Writer: lockedWriteCloser{sharedOut},
-	})
+	// 10. Run MCP server over stdio in a goroutine. We need it running before
+	// registering with the hub so the MCP transport is ready to emit the ping
+	// notification that arrives on registration.
+	mcpErr := make(chan error, 1)
+	go func() {
+		mcpErr <- server.Run(ctx, &mcp.IOTransport{
+			Reader: os.Stdin,
+			Writer: lockedWriteCloser{sharedOut},
+		})
+	}()
+
+	// Give the MCP transport a moment to start reading stdin.
+	time.Sleep(50 * time.Millisecond)
+
+	// 11. NOW register with the hub — the notification listener and MCP
+	// transport are both running, so the ping will be emitted correctly.
+	resp, err := mux.rpcCall(ctx, "hub.register", agent)
+	if err != nil {
+		return fmt.Errorf("hub.register call: %w", err)
+	}
+	if resp.Error != nil {
+		return fmt.Errorf("hub.register error: %s", resp.Error.Message)
+	}
+	log.Info("registered with hub", "agent_id", agentID)
+
+	// 12. Start heartbeat goroutine.
+	heartbeatCtx, heartbeatCancel := context.WithCancel(ctx)
+	defer heartbeatCancel()
+	go runHeartbeat(heartbeatCtx, mux, agentID, log)
+
+	// 13. Wait for MCP server to finish (stdin closed).
+	return <-mcpErr
 }
 
 // runHeartbeat sends periodic heartbeat RPCs to the hub.

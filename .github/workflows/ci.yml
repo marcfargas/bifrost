@@ -116,6 +116,10 @@ jobs:
         if: env.ANTHROPIC_AUTH_TOKEN != ''
         run: go test -tags e2e ./test/e2e/ -v -timeout 120s -run TestClaudeMCP_TwoAgentConversation
 
+      - name: "E2E: channel push (skipped — platform limitation)"
+        if: env.ANTHROPIC_AUTH_TOKEN != ''
+        run: go test -tags e2e ./test/e2e/ -v -timeout 120s -run TestClaudeMCP_ChannelPush
+
       - name: "E2E: plugin mode (skipped — needs investigation)"
         if: env.ANTHROPIC_AUTH_TOKEN != ''
         run: go test -tags e2e ./test/e2e/ -v -timeout 120s -run TestClaudePlugin_WhoAmI

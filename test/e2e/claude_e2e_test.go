@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -433,6 +434,126 @@ func TestClaudeMCP_TwoAgentConversation(t *testing.T) {
 	}
 
 	t.Log("Two-agent conversation complete: A→B and B→A both delivered")
+}
+
+// TestClaudeMCP_ChannelPush verifies that channel notifications are pushed to
+// the agent. A fake sender sends a message to the claude agent, and we verify
+// claude sees it as a <channel> tag in its conversation.
+//
+// Known limitation: --bare mode with --mcp-config may not support --channels
+// because --channels server:X looks up servers from user config, not --mcp-config.
+// This test documents the desired behavior and will pass once Claude Code
+// supports channel registration via --mcp-config.
+func TestClaudeMCP_ChannelPush(t *testing.T) {
+	t.Skip("--channels server:X requires server in user config, not --mcp-config — blocked on Claude Code platform")
+	te := setupClaudeTest(t)
+
+	// Build the fakesender binary.
+	senderBin := filepath.Join(t.TempDir(), "fakesender")
+	if runtime.GOOS == "windows" {
+		senderBin += ".exe"
+	}
+	cmd := exec.Command("go", "build", "-o", senderBin, "./test/e2e/cmd/fakesender")
+	cmd.Dir = findModuleRoot(t)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build fakesender: %v\n%s", err, out)
+	}
+
+	// Launch fakesender in background — it will register, wait 3 seconds,
+	// then send a message to whatever agent claude registers as.
+	// We need to guess claude's agent name. The shim uses project_name from
+	// the working dir. We'll target by listing agents first.
+
+	// Strategy: run fakesender targeting "agent:*" (broadcast) — but bifrost
+	// doesn't support wildcards in bifrost_send "to" field for non-"*" targets.
+	// Instead: use the hub store. We know the claude agent's ID will be based
+	// on hostname+path. Easier: just target by project name.
+	// The shim's project name comes from the working dir basename.
+	// Our test runs in socketDir, so project_name = basename of socketDir.
+
+	// Even simpler: have claude call bifrost_whoami first to get its own ID,
+	// then have fakesender target that ID. But fakesender runs before claude...
+
+	// Simplest approach: fakesender sends to "*" (broadcast). Claude will
+	// receive it as a channel notification. But messages.go handles "*" by
+	// calling routeBroadcast which skips the sender.
+
+	// Best approach: register fakesender, then in claude's prompt ask it to
+	// call bifrost_whoami AND wait for a message. Meanwhile fakesender
+	// sends to the agent name claude registers as.
+
+	// Actually — let's just have fakesender send to a well-known name.
+	// We set --display-name for the shim... except we don't control that
+	// through --mcp-config.
+
+	// Real approach: start claude, have it call bifrost_whoami to register,
+	// THEN start fakesender targeting that agent. But we don't know the ID
+	// until claude runs.
+
+	// Pragmatic: fakesender sends to ALL agents via broadcast "*".
+	// The hub will deliver to all online agents except fakesender.
+	// Claude should see it as a <channel> notification.
+
+	// Start fakesender with 3 second delay, broadcasting.
+	senderCtx, senderCancel := context.WithCancel(context.Background())
+	defer senderCancel()
+	sender := exec.CommandContext(senderCtx, senderBin,
+		te.socketPath, "*", "3", "CHANNEL_PUSH_TEST_MESSAGE")
+	sender.Env = te.buildEnv()
+	sender.Stderr = os.Stderr
+	if err := sender.Start(); err != nil {
+		t.Fatalf("start fakesender: %v", err)
+	}
+	defer sender.Process.Kill()
+
+	// Run claude with --channels so it receives push notifications.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	args := []string{
+		"--bare",
+		"--dangerously-skip-permissions",
+		"--dangerously-load-development-channels", "server:bifrost",
+		"--channels", "server:bifrost",
+		"-p", "First call bifrost_whoami to register. Then wait 5 seconds using the Bash tool (run 'sleep 5'). After waiting, report any <channel> notifications you received. If you see a message containing 'CHANNEL_PUSH_TEST_MESSAGE', output exactly 'PUSH_RECEIVED'. If no channel messages, output 'NO_PUSH'.",
+		"--model", "haiku",
+		"--max-turns", "8",
+		"--mcp-config", te.mcpConfigFlag(),
+	}
+
+	claudeCmd := exec.CommandContext(ctx, "claude", args...)
+	claudeCmd.Dir = te.socketDir
+	claudeCmd.Env = te.buildEnv()
+
+	var stdout, stderr bytes.Buffer
+	claudeCmd.Stdout = &stdout
+	claudeCmd.Stderr = &stderr
+
+	t.Log("running claude with --channels for push test...")
+	err := claudeCmd.Run()
+
+	t.Logf("stdout:\n%s", stdout.String())
+	if stderr.Len() > 0 {
+		t.Logf("stderr:\n%s", stderr.String())
+	}
+
+	if err != nil {
+		t.Fatalf("claude exited with error: %v", err)
+	}
+
+	output := stdout.String()
+	if strings.Contains(output, "PUSH_RECEIVED") {
+		t.Log("Channel push notification verified!")
+	} else if strings.Contains(output, "NO_PUSH") {
+		t.Fatal("Claude did not receive channel push notification")
+	} else {
+		t.Logf("Unexpected output (checking for partial match):\n%s", output)
+		if strings.Contains(output, "CHANNEL_PUSH_TEST_MESSAGE") {
+			t.Log("Channel push content found in output (partial match)")
+		} else {
+			t.Fatal("Could not verify channel push delivery")
+		}
+	}
 }
 
 // readRawNotification reads one JSON-RPC notification from a transport.Conn.
