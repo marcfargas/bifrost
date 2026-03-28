@@ -98,11 +98,21 @@ func (m *TaskManager) CreateTask(ctx context.Context, requesterID, assigneeAddr,
 		return nil, fmt.Errorf("tasks: subscribe assignee: %w", err)
 	}
 
-	// Notify assignee.
-	m.hub.NotifyAgent(assignee.AgentID, Notification{
-		Type:    "task_requested",
-		Payload: task,
-	})
+	// Notify assignee — forward via federation if the assignee is on a peer hub.
+	if assignee.PeerHub != "" {
+		if fed := m.hub.Federation(); fed != nil {
+			if err := fed.ForwardTaskCreate(ctx, assignee.PeerHub, task, nil); err != nil {
+				// Non-fatal: task is created, just notification failed.
+				// It will be delivered when the peer reconnects.
+				_ = err
+			}
+		}
+	} else {
+		m.hub.NotifyAgent(assignee.AgentID, Notification{
+			Type:    "task_requested",
+			Payload: task,
+		})
+	}
 
 	return task, nil
 }
@@ -157,11 +167,21 @@ func (m *TaskManager) UpdateTask(ctx context.Context, callerAgentID, taskID stri
 	}
 
 	// Notify all subscribers except the caller.
+	// For remote agents, forward via federation.
 	subscribers, err := m.store.GetSubscribers(ctx, "task:"+taskID)
 	if err == nil {
 		notif := Notification{Type: "task_updated", Payload: task}
+		forwarded := make(map[string]bool) // track which peer hubs we've forwarded to
 		for _, agentID := range subscribers {
 			if agentID == callerAgentID {
+				continue
+			}
+			// Check if the subscriber is on a peer hub.
+			if sub, err := m.store.GetAgent(ctx, agentID); err == nil && sub.PeerHub != "" {
+				if fed := m.hub.Federation(); fed != nil && !forwarded[sub.PeerHub] {
+					fed.ForwardTaskUpdate(ctx, sub.PeerHub, task)
+					forwarded[sub.PeerHub] = true
+				}
 				continue
 			}
 			m.hub.NotifyAgent(agentID, notif)
