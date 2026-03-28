@@ -1,0 +1,137 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build
+        run: go build ./...
+
+      - name: Unit tests
+        run: go test ./... -short -count=1
+
+      - name: Unit tests (race detector)
+        if: runner.os == 'Linux'
+        run: go test ./... -race -short -count=1
+
+  integration:
+    name: Integration (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Integration tests
+        run: go test ./test/integration/ -count=1 -v -timeout 120s
+
+  plugin:
+    name: Plugin verification
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build binary
+        run: go build -o bifrost ./cmd/bifrost
+
+      - name: Verify bifrost version
+        run: ./bifrost version
+
+      - name: Verify MCP shim responds to initialize
+        shell: bash
+        run: |
+          INIT='{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
+          output=$(printf '%s\n' "$INIT" | { cat; sleep 2; } | timeout 5 ./bifrost shim 2>/dev/null || true)
+          echo "$output"
+          if echo "$output" | grep -q '"serverInfo"'; then
+            echo "Shim OK — MCP server responded with serverInfo"
+          else
+            echo "FAIL: MCP shim did not respond"
+            exit 1
+          fi
+
+      - name: Verify plugin.json
+        shell: bash
+        run: |
+          if [ ! -f plugin/.claude-plugin/plugin.json ]; then
+            echo "FAIL: plugin.json missing"
+            exit 1
+          fi
+          name=$(jq -r '.name' plugin/.claude-plugin/plugin.json)
+          version=$(jq -r '.version' plugin/.claude-plugin/plugin.json)
+          if [ "$name" != "bifrost" ] || [ -z "$version" ]; then
+            echo "FAIL: plugin.json invalid (name=$name, version=$version)"
+            exit 1
+          fi
+          echo "plugin.json OK (name=$name, version=$version)"
+
+      - name: Verify .mcp.json
+        shell: bash
+        run: |
+          if [ ! -f plugin/.mcp.json ]; then
+            echo "FAIL: .mcp.json missing"
+            exit 1
+          fi
+          cmd=$(jq -r '.mcpServers.bifrost.command' plugin/.mcp.json)
+          if [ -z "$cmd" ]; then
+            echo "FAIL: .mcp.json has no bifrost server command"
+            exit 1
+          fi
+          echo ".mcp.json OK (command=$cmd)"
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Files not formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
