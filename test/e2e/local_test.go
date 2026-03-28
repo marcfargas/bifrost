@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -20,8 +21,16 @@ func startTestHub(t *testing.T) (*hub.Server, string) {
 	t.Helper()
 
 	tmpDir := t.TempDir()
-	socketPath := filepath.Join(tmpDir, "hub.sock")
 	dataDir := filepath.Join(tmpDir, "data")
+
+	// Unix sockets have a max path length of ~104 chars on macOS.
+	// t.TempDir() paths can exceed this, so use a short path for the socket.
+	socketDir, err := os.MkdirTemp("", "bf")
+	if err != nil {
+		t.Fatalf("create socket dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(socketDir) })
+	socketPath := filepath.Join(socketDir, "h.sock")
 
 	cfg := config.Defaults()
 	cfg.Hub.Local.SocketPath = socketPath

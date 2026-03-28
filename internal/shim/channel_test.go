@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,10 +14,34 @@ import (
 	"github.com/marcfargas/bifrost/pkg/protocol"
 )
 
-// testNotificationWriter returns a notificationWriter backed by a bytes.Buffer.
-func testNotificationWriter() (*notificationWriter, *bytes.Buffer) {
-	var buf bytes.Buffer
-	return &notificationWriter{w: &buf}, &buf
+// syncBuffer is a thread-safe bytes.Buffer for use in tests with the race detector.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (sb *syncBuffer) Write(p []byte) (int, error) {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	return sb.buf.Write(p)
+}
+
+func (sb *syncBuffer) Bytes() []byte {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	return append([]byte(nil), sb.buf.Bytes()...)
+}
+
+func (sb *syncBuffer) Len() int {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	return sb.buf.Len()
+}
+
+// testNotificationWriter returns a notificationWriter backed by a syncBuffer.
+func testNotificationWriter() (*notificationWriter, *syncBuffer) {
+	buf := &syncBuffer{}
+	return &notificationWriter{w: buf}, buf
 }
 
 // fakeHubMux creates an hubMux with a writable notifications channel (no real conn).

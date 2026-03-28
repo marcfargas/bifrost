@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -33,8 +34,11 @@ func setupFederatedE2E(t *testing.T) *federatedE2E {
 
 	// --- Hub A ---
 	dirA := t.TempDir()
-	socketA := filepath.Join(dirA, "hub-a.sock")
 	dataA := filepath.Join(dirA, "data")
+	// Short socket path for macOS (104 char limit on unix socket paths).
+	sockDirA, _ := os.MkdirTemp("", "bfA")
+	t.Cleanup(func() { os.RemoveAll(sockDirA) })
+	socketA := filepath.Join(sockDirA, "h.sock")
 
 	cfgA := config.Defaults()
 	cfgA.Hub.Local.SocketPath = socketA
@@ -61,8 +65,10 @@ func setupFederatedE2E(t *testing.T) *federatedE2E {
 
 	// --- Hub B ---
 	dirB := t.TempDir()
-	socketB := filepath.Join(dirB, "hub-b.sock")
 	dataB := filepath.Join(dirB, "data")
+	sockDirB, _ := os.MkdirTemp("", "bfB")
+	t.Cleanup(func() { os.RemoveAll(sockDirB) })
+	socketB := filepath.Join(sockDirB, "h.sock")
 
 	cfgB := config.Defaults()
 	cfgB.Hub.Local.SocketPath = socketB
