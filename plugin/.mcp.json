@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "bifrost": {
+      "command": "bifrost",
+      "args": ["shim"],
+      "env": {}
+    }
+  }
+}
