@@ -81,13 +81,10 @@ func TestClaudeWhoAmI(t *testing.T) {
 	// Wait for socket to be ready.
 	waitForSocket(t, socketPath, 5*time.Second)
 
-	// Create a project directory with .mcp.json so claude discovers bifrost.
 	projectDir := filepath.Join(socketDir, "project")
-	claudeDir := filepath.Join(projectDir, ".claude")
-	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
-		t.Fatalf("mkdir project: %v", err)
-	}
+	os.MkdirAll(projectDir, 0o755)
 
+	// Build MCP config for --mcp-config flag.
 	mcpCfg := map[string]any{
 		"mcpServers": map[string]any{
 			"bifrost": map[string]any{
@@ -96,24 +93,23 @@ func TestClaudeWhoAmI(t *testing.T) {
 			},
 		},
 	}
-	mcpJSON, _ := json.MarshalIndent(mcpCfg, "", "  ")
-	if err := os.WriteFile(filepath.Join(claudeDir, "settings.json"), mcpJSON, 0o644); err != nil {
-		t.Fatalf("write settings.json: %v", err)
-	}
+	mcpJSON, _ := json.Marshal(mcpCfg)
 
-	// Run claude -p asking it to use bifrost_whoami.
+	// Run claude -p in bare mode with explicit MCP config.
 	claudeCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(claudeCtx, "claude",
+		"--bare",
+		"--dangerously-skip-permissions",
 		"-p", "Use the bifrost_whoami tool and tell me your agent ID. Output ONLY the agent ID, nothing else.",
 		"--model", "haiku",
-		"--max-turns", "3",
+		"--max-turns", "5",
+		"--mcp-config", string(mcpJSON),
 	)
 	cmd.Dir = projectDir
 
-	// Set BIFROST_SOCKET_PATH so the shim's config.SocketPath() resolves to our
-	// test socket. Also pass through ANTHROPIC_API_KEY.
+	// Set BIFROST_SOCKET_PATH so the shim connects to our test hub.
 	cmd.Env = buildEnv(socketPath)
 
 	var stdout, stderr bytes.Buffer
@@ -199,12 +195,8 @@ func TestClaudeListAgents(t *testing.T) {
 		t.Fatalf("register fake agent: %s", result.resp.Error.Message)
 	}
 
-	// Set up project dir with MCP config.
 	projectDir := filepath.Join(socketDir, "project")
-	claudeDir := filepath.Join(projectDir, ".claude")
-	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
-		t.Fatalf("mkdir project: %v", err)
-	}
+	os.MkdirAll(projectDir, 0o755)
 
 	mcpCfg := map[string]any{
 		"mcpServers": map[string]any{
@@ -214,18 +206,18 @@ func TestClaudeListAgents(t *testing.T) {
 			},
 		},
 	}
-	mcpJSON, _ := json.MarshalIndent(mcpCfg, "", "  ")
-	if err := os.WriteFile(filepath.Join(claudeDir, "settings.json"), mcpJSON, 0o644); err != nil {
-		t.Fatalf("write settings.json: %v", err)
-	}
+	mcpJSON, _ := json.Marshal(mcpCfg)
 
 	claudeCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(claudeCtx, "claude",
+		"--bare",
+		"--dangerously-skip-permissions",
 		"-p", "Use the bifrost_list_agents tool and tell me the names of all connected agents. Output ONLY the agent names, one per line.",
 		"--model", "haiku",
-		"--max-turns", "3",
+		"--max-turns", "5",
+		"--mcp-config", string(mcpJSON),
 	)
 	cmd.Dir = projectDir
 	cmd.Env = buildEnv(socketPath)
