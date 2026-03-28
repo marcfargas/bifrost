@@ -66,16 +66,14 @@ func (h *Handler) Handle(ctx context.Context, conn *transport.Conn, req *RPCRequ
 		return h.handleSendMessage(ctx, req)
 	case "hub.list_conversations":
 		return h.handleListConversations(ctx, req)
-	case "task.create":
-		return h.handleCreateTask(ctx, req)
+	case "task.request":
+		return h.handleRequestTask(ctx, req)
 	case "task.update":
 		return h.handleUpdateTask(ctx, req)
 	case "task.get":
 		return h.handleGetTask(ctx, req)
 	case "task.list":
 		return h.handleListTasks(ctx, req)
-	case "task.attach":
-		return h.handleAttachFile(ctx, req)
 	case "channel.subscribe":
 		return h.handleSubscribe(ctx, req)
 	case "channel.unsubscribe":
@@ -86,8 +84,6 @@ func (h *Handler) Handle(ctx context.Context, conn *transport.Conn, req *RPCRequ
 		return h.handleDNDSet(ctx, req)
 	case "dnd.status":
 		return h.handleDNDStatus(ctx, req)
-	case "task.retrieve_attachment":
-		return h.handleRetrieveAttachment(ctx, req)
 	case "peer.new":
 		return h.handlePeerNew(ctx, req)
 	case "peer.join":
@@ -96,8 +92,6 @@ func (h *Handler) Handle(ctx context.Context, conn *transport.Conn, req *RPCRequ
 		return h.handlePeerList(ctx, req)
 	case "hub.remove_agent":
 		return h.handleRemoveAgent(ctx, req)
-	case "hub.queue_status":
-		return h.handleQueueStatus(ctx, req)
 	default:
 		return rpcError(req.ID, -32601, "method not found")
 	}
@@ -275,15 +269,13 @@ func (h *Handler) handleListConversations(ctx context.Context, req *RPCRequest) 
 	}
 }
 
-// handleCreateTask parses task creation params, creates the task, and
-// optionally stores file attachments.
-func (h *Handler) handleCreateTask(ctx context.Context, req *RPCRequest) *RPCResponse {
+// handleRequestTask parses task request params and creates a task conversation.
+func (h *Handler) handleRequestTask(ctx context.Context, req *RPCRequest) *RPCResponse {
 	var params struct {
-		Requester   string   `json:"requester"`
-		Assignee    string   `json:"assignee"`
-		Title       string   `json:"title"`
-		Description string   `json:"description"`
-		Files       []string `json:"files"`
+		Requester   string `json:"requester"`
+		Assignee    string `json:"assignee"`
+		Title       string `json:"title"`
+		Description string `json:"description"`
 	}
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		return rpcError(req.ID, -32602, "invalid params: "+err.Error())
@@ -300,41 +292,27 @@ func (h *Handler) handleCreateTask(ctx context.Context, req *RPCRequest) *RPCRes
 
 	task, err := h.hub.Tasks().CreateTask(ctx, params.Requester, params.Assignee, params.Title, params.Description)
 	if err != nil {
-		return rpcError(req.ID, -32000, "create task failed: "+err.Error())
-	}
-
-	if len(params.Files) > 0 && h.hub.Attachments() != nil {
-		for _, filePath := range params.Files {
-			if _, storeErr := h.hub.Attachments().Store(ctx, task.TaskID, params.Requester, filePath); storeErr != nil {
-				return rpcError(req.ID, -32000, "store attachment failed: "+storeErr.Error())
-			}
+		if notFound, ok := errors.AsType[*core.AgentNotFoundError](err); ok {
+			resp := rpcError(req.ID, -32001, err.Error())
+			resp.Error.Data = notFound.Available
+			return resp
 		}
+		return rpcError(req.ID, -32000, "request task failed: "+err.Error())
 	}
 
-	h.logger.Info("task created",
-		"title", task.Title,
-		"assignee", task.Assignee,
-		"requester", task.Requester,
-	)
+	h.logger.Info("task requested", "title", task.Title, "assignee", task.Assignee)
 
-	return &RPCResponse{
-		JSONRPC: "2.0",
-		ID:      req.ID,
-		Result:  task,
-	}
+	return &RPCResponse{JSONRPC: "2.0", ID: req.ID, Result: task}
 }
 
-// handleUpdateTask parses task update params, applies the update, and
-// optionally stores file attachments.
+// handleUpdateTask parses task update params and appends a status event.
 func (h *Handler) handleUpdateTask(ctx context.Context, req *RPCRequest) *RPCResponse {
 	var params struct {
-		AgentID     string              `json:"agent_id"`
-		TaskID      string              `json:"task_id"`
-		Status      protocol.TaskStatus `json:"status"`
-		Description string              `json:"description"`
-		Summary     string              `json:"summary"`
-		Reason      string              `json:"reason"`
-		Files       []string            `json:"files"`
+		AgentID        string              `json:"agent_id"`
+		ConversationID string              `json:"conversation_id"`
+		Status         protocol.TaskStatus `json:"status"`
+		Summary        string              `json:"summary"`
+		Reason         string              `json:"reason"`
 	}
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		return rpcError(req.ID, -32602, "invalid params: "+err.Error())
@@ -342,68 +320,52 @@ func (h *Handler) handleUpdateTask(ctx context.Context, req *RPCRequest) *RPCRes
 	if params.AgentID == "" {
 		return rpcError(req.ID, -32602, "agent_id is required")
 	}
-	if params.TaskID == "" {
-		return rpcError(req.ID, -32602, "task_id is required")
+	if params.ConversationID == "" {
+		return rpcError(req.ID, -32602, "conversation_id is required")
 	}
 
 	update := core.TaskUpdate{
-		Status:      params.Status,
-		Description: params.Description,
-		Summary:     params.Summary,
-		Reason:      params.Reason,
+		Status:  params.Status,
+		Summary: params.Summary,
+		Reason:  params.Reason,
 	}
 
-	task, err := h.hub.Tasks().UpdateTask(ctx, params.AgentID, params.TaskID, update)
+	task, err := h.hub.Tasks().UpdateTask(ctx, params.AgentID, params.ConversationID, update)
 	if err != nil {
 		return rpcError(req.ID, -32000, "update task failed: "+err.Error())
 	}
 
-	if len(params.Files) > 0 && h.hub.Attachments() != nil {
-		for _, filePath := range params.Files {
-			if _, storeErr := h.hub.Attachments().Store(ctx, task.TaskID, params.AgentID, filePath); storeErr != nil {
-				return rpcError(req.ID, -32000, "store attachment failed: "+storeErr.Error())
-			}
-		}
-	}
+	h.logger.Info("task updated", "id", task.ConversationID, "status", task.Status)
 
-	h.logger.Info("task updated", "id", task.TaskID, "status", task.Status)
-
-	return &RPCResponse{
-		JSONRPC: "2.0",
-		ID:      req.ID,
-		Result:  task,
-	}
+	return &RPCResponse{JSONRPC: "2.0", ID: req.ID, Result: task}
 }
 
-// handleGetTask retrieves a task by ID, including its attachment list.
+// handleGetTask retrieves a task by conversation ID, deriving its view from events.
 func (h *Handler) handleGetTask(ctx context.Context, req *RPCRequest) *RPCResponse {
 	var params struct {
-		TaskID string `json:"task_id"`
+		ConversationID string `json:"conversation_id"`
 	}
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		return rpcError(req.ID, -32602, "invalid params: "+err.Error())
 	}
-	if params.TaskID == "" {
-		return rpcError(req.ID, -32602, "task_id is required")
+	if params.ConversationID == "" {
+		return rpcError(req.ID, -32602, "conversation_id is required")
 	}
 
-	task, err := h.hub.Tasks().GetTask(ctx, params.TaskID)
+	task, err := h.hub.Tasks().GetTask(ctx, params.ConversationID)
 	if err != nil {
 		return rpcError(req.ID, -32000, "get task failed: "+err.Error())
 	}
 	if task == nil {
-		return rpcError(req.ID, -32001, "task not found: "+params.TaskID)
+		return rpcError(req.ID, -32001, "task not found: "+params.ConversationID)
 	}
 
-	return &RPCResponse{
-		JSONRPC: "2.0",
-		ID:      req.ID,
-		Result:  task,
-	}
+	return &RPCResponse{JSONRPC: "2.0", ID: req.ID, Result: task}
 }
 
-// handleListTasks lists tasks with optional status, requester, assignee, and
-// limit filters.
+// handleListTasks lists task conversations with optional status, requester, and
+// assignee filters. Status filtering is applied in-memory since status is
+// derived from events, not a stored column.
 func (h *Handler) handleListTasks(ctx context.Context, req *RPCRequest) *RPCResponse {
 	var params struct {
 		Status    protocol.TaskStatus `json:"status"`
@@ -425,47 +387,7 @@ func (h *Handler) handleListTasks(ctx context.Context, req *RPCRequest) *RPCResp
 		return rpcError(req.ID, -32000, "list tasks failed: "+err.Error())
 	}
 
-	return &RPCResponse{
-		JSONRPC: "2.0",
-		ID:      req.ID,
-		Result:  tasks,
-	}
-}
-
-// handleAttachFile stores a single file attachment for a task.
-func (h *Handler) handleAttachFile(ctx context.Context, req *RPCRequest) *RPCResponse {
-	var params struct {
-		AgentID  string `json:"agent_id"`
-		TaskID   string `json:"task_id"`
-		FilePath string `json:"file_path"`
-	}
-	if err := json.Unmarshal(req.Params, &params); err != nil {
-		return rpcError(req.ID, -32602, "invalid params: "+err.Error())
-	}
-	if params.AgentID == "" {
-		return rpcError(req.ID, -32602, "agent_id is required")
-	}
-	if params.TaskID == "" {
-		return rpcError(req.ID, -32602, "task_id is required")
-	}
-	if params.FilePath == "" {
-		return rpcError(req.ID, -32602, "file_path is required")
-	}
-
-	if h.hub.Attachments() == nil {
-		return rpcError(req.ID, -32000, "attachment storage not configured")
-	}
-
-	att, err := h.hub.Attachments().Store(ctx, params.TaskID, params.AgentID, params.FilePath)
-	if err != nil {
-		return rpcError(req.ID, -32000, "attach file failed: "+err.Error())
-	}
-
-	return &RPCResponse{
-		JSONRPC: "2.0",
-		ID:      req.ID,
-		Result:  att,
-	}
+	return &RPCResponse{JSONRPC: "2.0", ID: req.ID, Result: tasks}
 }
 
 // handleSubscribe subscribes an agent to a channel or task target.
@@ -607,26 +529,6 @@ func (h *Handler) handleDNDStatus(ctx context.Context, req *RPCRequest) *RPCResp
 			"enabled": enabled,
 			"reason":  agent.DNDReason,
 			"queued":  queued,
-		},
-	}
-}
-
-// handleQueueStatus returns per-agent and per-peer message queue statistics.
-func (h *Handler) handleQueueStatus(ctx context.Context, req *RPCRequest) *RPCResponse {
-	agentEntries, err := h.hub.Store().QueueStats(ctx)
-	if err != nil {
-		return rpcError(req.ID, -32000, "queue stats failed: "+err.Error())
-	}
-	peerEntries, err := h.hub.Store().PeerQueueStats(ctx)
-	if err != nil {
-		return rpcError(req.ID, -32000, "peer queue stats failed: "+err.Error())
-	}
-	return &RPCResponse{
-		JSONRPC: "2.0",
-		ID:      req.ID,
-		Result: map[string]any{
-			"agents": agentEntries,
-			"peers":  peerEntries,
 		},
 	}
 }
@@ -779,34 +681,4 @@ func (h *Handler) handleRemoveAgent(ctx context.Context, req *RPCRequest) *RPCRe
 			"name":     agent.DisplayName,
 		},
 	}
-}
-
-// handleRetrieveAttachment copies an attachment file to the requested
-// destination directory and returns the resulting path.
-func (h *Handler) handleRetrieveAttachment(ctx context.Context, req *RPCRequest) *RPCResponse {
-	var params struct {
-		AttachmentID string `json:"attachment_id"`
-		DestDir      string `json:"dest_dir"`
-	}
-	if err := json.Unmarshal(req.Params, &params); err != nil {
-		return rpcError(req.ID, -32602, "invalid params: "+err.Error())
-	}
-	if params.AttachmentID == "" {
-		return rpcError(req.ID, -32602, "attachment_id is required")
-	}
-	if params.DestDir == "" {
-		return rpcError(req.ID, -32602, "dest_dir is required")
-	}
-	if h.hub.Attachments() == nil {
-		return rpcError(req.ID, -32000, "attachment storage not configured")
-	}
-
-	destPath, err := h.hub.Attachments().Retrieve(ctx, params.AttachmentID, params.DestDir)
-	if err != nil {
-		return rpcError(req.ID, -32000, "retrieve attachment: "+err.Error())
-	}
-
-	return &RPCResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]string{
-		"path": destPath,
-	}}
 }
