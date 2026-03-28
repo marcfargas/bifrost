@@ -17,8 +17,8 @@ type Notifier interface {
 
 // Notification carries an event type and arbitrary payload to an agent.
 type Notification struct {
-	Type    string
-	Payload any
+	Type    string `json:"type"`
+	Payload any    `json:"payload"`
 }
 
 // FederationForwarder is the interface the hub core uses to forward messages

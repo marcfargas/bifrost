@@ -198,8 +198,9 @@ func listenHubNotifications(ctx context.Context, mux *hubMux, nw *notificationWr
 		case <-ctx.Done():
 			return
 		case notif := <-mux.notifications:
+			log.Info("received hub notification", "method", notif.Method)
 			if notif.Method != "bifrost.notification" {
-				log.Debug("ignoring hub notification", "method", notif.Method)
+				log.Info("ignoring hub notification (not bifrost.notification)", "method", notif.Method)
 				continue
 			}
 
@@ -291,8 +292,11 @@ func listenHubNotifications(ctx context.Context, mux *hubMux, nw *notificationWr
 				cp.Meta["event"] = envelope.Type
 			}
 
+			log.Info("emitting channel notification", "type", envelope.Type, "message_preview", cp.Message[:min(len(cp.Message), 50)])
 			if err := nw.writeNotification("notifications/claude/channel", cp); err != nil {
 				log.Warn("failed to write channel notification", "error", err)
+			} else {
+				log.Info("channel notification written successfully")
 			}
 		}
 	}
