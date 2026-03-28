@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"sync"
 	"testing"
@@ -154,24 +153,25 @@ func TestNotificationWriter_WriteNotification(t *testing.T) {
 
 func TestListenHubNotifications_MessageNew(t *testing.T) {
 	ts := time.Date(2026, 3, 28, 12, 0, 0, 0, time.UTC)
-	payload := protocol.Message{
+	payload := protocol.Event{
 		ID:             "msg-1",
 		ConversationID: "conv-1",
-		From:           "agent-a",
-		To:             "agent-b",
-		Type:           protocol.MessageTypeQuestion,
-		Body:           "Hello from A",
-		Priority:       protocol.PriorityNormal,
+		Type:           protocol.EventTypeMessage,
+		FromAgent:      "agent-a",
 		Timestamp:      ts,
-		InReplyTo:      "msg-0",
-		NoReply:        true,
+		Data: protocol.EventData{
+			Body:        "Hello from A",
+			MessageType: protocol.MessageTypeQuestion,
+			Priority:    protocol.PriorityNormal,
+			InReplyTo:   "msg-0",
+		},
 	}
 
 	notif := hub.RPCNotification{
 		JSONRPC: "2.0",
 		Method:  "bifrost.notification",
 		Params: map[string]any{
-			"type":    "message.new",
+			"type":    "event.new",
 			"payload": payload,
 		},
 	}
@@ -193,9 +193,6 @@ func TestListenHubNotifications_MessageNew(t *testing.T) {
 	}
 	if cp.Meta["in_reply_to"] != "msg-0" {
 		t.Errorf("meta.in_reply_to: got %q, want %q", cp.Meta["in_reply_to"], "msg-0")
-	}
-	if cp.Meta["noreply"] != "true" {
-		t.Errorf("meta.noreply: got %q, want %q", cp.Meta["noreply"], "true")
 	}
 	if cp.Meta["ts"] != "2026-03-28T12:00:00Z" {
 		t.Errorf("meta.ts: got %q, want %q", cp.Meta["ts"], "2026-03-28T12:00:00Z")
@@ -311,12 +308,12 @@ func TestListenHubNotifications_TaskRequested(t *testing.T) {
 		Method:  "bifrost.notification",
 		Params: map[string]any{
 			"type": "task_requested",
-			"payload": protocol.Task{
-				TaskID:      "task-1",
-				Title:       "Fix the bug",
-				Description: "There is a bug in X",
-				Requester:   "agent-a",
-				Assignee:    "agent-b",
+			"payload": protocol.TaskView{
+				ConversationID: "task-1",
+				Title:          "Fix the bug",
+				Requester:      "agent-a",
+				Assignee:       "agent-b",
+				Status:         protocol.TaskStatusRequested,
 			},
 		},
 	}
@@ -324,7 +321,7 @@ func TestListenHubNotifications_TaskRequested(t *testing.T) {
 	data := runListenAndCapture(t, notif)
 	_, cp := parseChannelNotification(t, data)
 
-	expected := fmt.Sprintf("Task requested: %s\n%s", "Fix the bug", "There is a bug in X")
+	expected := "Task requested: Fix the bug"
 	if cp.Content != expected {
 		t.Errorf("message: got %q, want %q", cp.Content, expected)
 	}
@@ -350,14 +347,17 @@ func TestListenHubNotifications_TaskUpdated(t *testing.T) {
 		JSONRPC: "2.0",
 		Method:  "bifrost.notification",
 		Params: map[string]any{
-			"type": "task_updated",
-			"payload": protocol.Task{
-				TaskID:   "task-2",
-				Title:    "Deploy",
-				Status:   protocol.TaskStatusCompleted,
-				Assignee: "agent-c",
-				Summary:  "Deployed successfully",
-				Reason:   "all green",
+			"type": "event.new",
+			"payload": protocol.Event{
+				ID:             "ev-1",
+				ConversationID: "task-2",
+				Type:           protocol.EventTypeStatus,
+				FromAgent:      "agent-c",
+				Data: protocol.EventData{
+					NewStatus: protocol.TaskStatusCompleted,
+					Summary:   "Deployed successfully",
+					Reason:    "all green",
+				},
 			},
 		},
 	}
@@ -365,24 +365,18 @@ func TestListenHubNotifications_TaskUpdated(t *testing.T) {
 	data := runListenAndCapture(t, notif)
 	_, cp := parseChannelNotification(t, data)
 
-	expected := "Task task-2 updated: status=completed"
+	expected := "Task status: completed"
 	if cp.Content != expected {
 		t.Errorf("message: got %q, want %q", cp.Content, expected)
 	}
 	if cp.Meta["event"] != "task_updated" {
 		t.Errorf("meta.event: got %q", cp.Meta["event"])
 	}
-	if cp.Meta["task_id"] != "task-2" {
-		t.Errorf("meta.task_id: got %q", cp.Meta["task_id"])
+	if cp.Meta["conversation"] != "task-2" {
+		t.Errorf("meta.conversation: got %q", cp.Meta["conversation"])
 	}
 	if cp.Meta["status"] != "completed" {
 		t.Errorf("meta.status: got %q", cp.Meta["status"])
-	}
-	if cp.Meta["title"] != "Deploy" {
-		t.Errorf("meta.title: got %q", cp.Meta["title"])
-	}
-	if cp.Meta["assignee"] != "agent-c" {
-		t.Errorf("meta.assignee: got %q", cp.Meta["assignee"])
 	}
 	if cp.Meta["summary"] != "Deployed successfully" {
 		t.Errorf("meta.summary: got %q", cp.Meta["summary"])

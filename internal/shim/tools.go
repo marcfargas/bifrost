@@ -16,7 +16,7 @@ func registerTools(server *mcp.Server, mux *hubMux, agent *protocol.Agent, nw *n
 	registerWhoAmI(server, agent)
 	registerSend(server, mux, agent)
 	registerListConversations(server, mux)
-	registerCreateTask(server, mux, agent)
+	registerRequestTask(server, mux, agent)
 	registerUpdateTask(server, mux, agent)
 	registerGetTask(server, mux)
 	registerListTasks(server, mux)
@@ -172,19 +172,18 @@ func registerListConversations(server *mcp.Server, mux *hubMux) {
 	})
 }
 
-// registerCreateTask registers the bifrost_create_task tool.
-func registerCreateTask(server *mcp.Server, mux *hubMux, agent *protocol.Agent) {
-	type createTaskArgs struct {
-		Assignee    string   `json:"assignee" jsonschema:"agent address to assign the task to"`
-		Title       string   `json:"title" jsonschema:"short task title"`
-		Description string   `json:"description,omitempty" jsonschema:"full task description"`
-		Files       []string `json:"files,omitempty" jsonschema:"optional list of local file paths to attach"`
+// registerRequestTask registers the bifrost_request_task tool.
+func registerRequestTask(server *mcp.Server, mux *hubMux, agent *protocol.Agent) {
+	type requestTaskArgs struct {
+		Assignee    string `json:"assignee" jsonschema:"agent address to assign the task to"`
+		Title       string `json:"title" jsonschema:"short task title"`
+		Description string `json:"description,omitempty" jsonschema:"full task description"`
 	}
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "bifrost_create_task",
-		Description: "Create a new task assigned to another agent in the Bifrost network.",
-	}, func(ctx context.Context, req *mcp.CallToolRequest, args createTaskArgs) (*mcp.CallToolResult, any, error) {
+		Name:        "bifrost_request_task",
+		Description: "Request another agent to perform a task. Creates a task conversation and notifies the assignee.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args requestTaskArgs) (*mcp.CallToolResult, any, error) {
 		if args.Assignee == "" {
 			return errorResult("assignee is required"), nil, nil
 		}
@@ -198,24 +197,27 @@ func registerCreateTask(server *mcp.Server, mux *hubMux, agent *protocol.Agent) 
 			"title":       args.Title,
 			"description": args.Description,
 		}
-		if len(args.Files) > 0 {
-			params["files"] = args.Files
-		}
 
-		resp, err := mux.rpcCall(ctx, "task.create", params)
+		resp, err := mux.rpcCall(ctx, "task.request", params)
 		if err != nil {
 			return nil, nil, fmt.Errorf("hub call failed: %w", err)
 		}
 		if resp.Error != nil {
-			return errorResult(resp.Error.Message), nil, nil
+			result := resp.Error.Message
+			if resp.Error.Data != nil {
+				if agents, err := formatJSON(resp.Error.Data); err == nil {
+					result += "\n\nAvailable agents:\n" + agents
+				}
+			}
+			return errorResult(result), nil, nil
 		}
 
 		text, err := formatJSON(resp.Result)
 		if err != nil {
-			return errorResult("task created but failed to format response"), nil, nil
+			return errorResult("task requested but failed to format response"), nil, nil
 		}
 		return &mcp.CallToolResult{
-			Content: []mcp.Content{&mcp.TextContent{Text: "Task created.\n" + text}},
+			Content: []mcp.Content{&mcp.TextContent{Text: "Task requested.\n" + text}},
 		}, nil, nil
 	})
 }
@@ -223,40 +225,32 @@ func registerCreateTask(server *mcp.Server, mux *hubMux, agent *protocol.Agent) 
 // registerUpdateTask registers the bifrost_update_task tool.
 func registerUpdateTask(server *mcp.Server, mux *hubMux, agent *protocol.Agent) {
 	type updateTaskArgs struct {
-		TaskID      string   `json:"task_id" jsonschema:"ID of the task to update"`
-		Status      string   `json:"status,omitempty" jsonschema:"new status: accepted, in_progress, completed, failed, rejected"`
-		Description string   `json:"description,omitempty" jsonschema:"updated task description"`
-		Summary     string   `json:"summary,omitempty" jsonschema:"completion summary"`
-		Reason      string   `json:"reason,omitempty" jsonschema:"reason for rejection or failure"`
-		Files       []string `json:"files,omitempty" jsonschema:"optional list of local file paths to attach"`
+		ConversationID string `json:"conversation_id" jsonschema:"conversation ID of the task to update"`
+		Status         string `json:"status,omitempty" jsonschema:"new status: accepted, in_progress, completed, failed, rejected"`
+		Summary        string `json:"summary,omitempty" jsonschema:"completion summary"`
+		Reason         string `json:"reason,omitempty" jsonschema:"reason for rejection or failure"`
 	}
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "bifrost_update_task",
 		Description: "Update the status or details of a task in the Bifrost network.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args updateTaskArgs) (*mcp.CallToolResult, any, error) {
-		if args.TaskID == "" {
-			return errorResult("task_id is required"), nil, nil
+		if args.ConversationID == "" {
+			return errorResult("conversation_id is required"), nil, nil
 		}
 
 		params := map[string]any{
-			"agent_id": agent.AgentID,
-			"task_id":  args.TaskID,
+			"agent_id":        agent.AgentID,
+			"conversation_id": args.ConversationID,
 		}
 		if args.Status != "" {
 			params["status"] = args.Status
-		}
-		if args.Description != "" {
-			params["description"] = args.Description
 		}
 		if args.Summary != "" {
 			params["summary"] = args.Summary
 		}
 		if args.Reason != "" {
 			params["reason"] = args.Reason
-		}
-		if len(args.Files) > 0 {
-			params["files"] = args.Files
 		}
 
 		resp, err := mux.rpcCall(ctx, "task.update", params)
@@ -280,18 +274,18 @@ func registerUpdateTask(server *mcp.Server, mux *hubMux, agent *protocol.Agent) 
 // registerGetTask registers the bifrost_get_task tool.
 func registerGetTask(server *mcp.Server, mux *hubMux) {
 	type getTaskArgs struct {
-		TaskID string `json:"task_id" jsonschema:"ID of the task to retrieve"`
+		ConversationID string `json:"conversation_id" jsonschema:"conversation ID of the task"`
 	}
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "bifrost_get_task",
-		Description: "Get full details of a task by ID, including status, description, and attachment list.",
+		Description: "Get full details of a task by conversation ID, including status and summary.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args getTaskArgs) (*mcp.CallToolResult, any, error) {
-		if args.TaskID == "" {
-			return errorResult("task_id is required"), nil, nil
+		if args.ConversationID == "" {
+			return errorResult("conversation_id is required"), nil, nil
 		}
 
-		resp, err := mux.rpcCall(ctx, "task.get", map[string]any{"task_id": args.TaskID})
+		resp, err := mux.rpcCall(ctx, "task.get", map[string]any{"conversation_id": args.ConversationID})
 		if err != nil {
 			return nil, nil, fmt.Errorf("hub call failed: %w", err)
 		}
@@ -305,7 +299,7 @@ func registerGetTask(server *mcp.Server, mux *hubMux) {
 			return errorResult("failed to marshal task"), nil, nil
 		}
 
-		var task protocol.Task
+		var task protocol.TaskView
 		if err := json.Unmarshal(taskData, &task); err != nil {
 			// Fall back to raw JSON if we can't parse it.
 			text, _ := formatJSON(resp.Result)
@@ -315,14 +309,11 @@ func registerGetTask(server *mcp.Server, mux *hubMux) {
 		}
 
 		var sb strings.Builder
-		fmt.Fprintf(&sb, "Task: %s\n", task.TaskID)
+		fmt.Fprintf(&sb, "Task: %s\n", task.ConversationID)
 		fmt.Fprintf(&sb, "Title: %s\n", task.Title)
 		fmt.Fprintf(&sb, "Status: %s\n", task.Status)
 		fmt.Fprintf(&sb, "Requester: %s\n", task.Requester)
 		fmt.Fprintf(&sb, "Assignee: %s\n", task.Assignee)
-		if task.Description != "" {
-			fmt.Fprintf(&sb, "Description:\n  %s\n", strings.ReplaceAll(task.Description, "\n", "\n  "))
-		}
 		if task.Summary != "" {
 			fmt.Fprintf(&sb, "Summary:\n  %s\n", strings.ReplaceAll(task.Summary, "\n", "\n  "))
 		}
@@ -331,12 +322,6 @@ func registerGetTask(server *mcp.Server, mux *hubMux) {
 		}
 		fmt.Fprintf(&sb, "Created: %s\n", task.CreatedAt.Format("2006-01-02 15:04:05 UTC"))
 		fmt.Fprintf(&sb, "Updated: %s\n", task.UpdatedAt.Format("2006-01-02 15:04:05 UTC"))
-		if len(task.Attachments) > 0 {
-			fmt.Fprintf(&sb, "Attachments (%d):\n", len(task.Attachments))
-			for _, att := range task.Attachments {
-				fmt.Fprintf(&sb, "  - %s\n", att)
-			}
-		}
 
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}},
@@ -381,7 +366,7 @@ func registerListTasks(server *mcp.Server, mux *hubMux) {
 			return errorResult("failed to marshal task list"), nil, nil
 		}
 
-		var tasks []protocol.Task
+		var tasks []protocol.TaskView
 		if err := json.Unmarshal(taskData, &tasks); err != nil || len(tasks) == 0 {
 			if err == nil && len(tasks) == 0 {
 				return &mcp.CallToolResult{
@@ -396,8 +381,8 @@ func registerListTasks(server *mcp.Server, mux *hubMux) {
 		}
 
 		var sb strings.Builder
-		fmt.Fprintf(&sb, "%-26s  %-12s  %-20s  %s\n", "TASK ID", "STATUS", "ASSIGNEE", "TITLE")
-		fmt.Fprintf(&sb, "%s\n", strings.Repeat("-", 80))
+		fmt.Fprintf(&sb, "%-36s  %-12s  %-20s  %s\n", "CONVERSATION ID", "STATUS", "ASSIGNEE", "TITLE")
+		fmt.Fprintf(&sb, "%s\n", strings.Repeat("-", 90))
 		for _, t := range tasks {
 			title := t.Title
 			if len(title) > 30 {
@@ -407,7 +392,7 @@ func registerListTasks(server *mcp.Server, mux *hubMux) {
 			if len(assignee) > 20 {
 				assignee = assignee[:17] + "..."
 			}
-			fmt.Fprintf(&sb, "%-26s  %-12s  %-20s  %s\n", t.TaskID, string(t.Status), assignee, title)
+			fmt.Fprintf(&sb, "%-36s  %-12s  %-20s  %s\n", t.ConversationID, string(t.Status), assignee, title)
 		}
 
 		return &mcp.CallToolResult{

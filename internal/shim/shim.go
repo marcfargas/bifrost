@@ -52,18 +52,18 @@ Messages from other agents arrive as <channel source="bifrost" from="..." type="
 Reply with bifrost_send — set "to" to the agent name from the "from" attribute.
 Address agents by name (e.g. "agent:api-backend"). If ambiguous, the tool lists available agents.
 
-TASKS: Use bifrost_create_task when asking another agent to DO WORK (implement a feature,
+TASKS: Use bifrost_request_task when asking another agent to DO WORK (implement a feature,
 fix a bug, run tests, deploy, etc). Tasks have a lifecycle:
-  1. You create a task with bifrost_create_task (assignee, title, description)
+  1. You request a task with bifrost_request_task (assignee, title, description)
   2. The assignee receives it and can ask clarifying questions via bifrost_send
   3. The assignee accepts with bifrost_update_task (status: "accepted")
   4. The assignee works, updates progress (status: "in_progress")
   5. The assignee completes (status: "completed", summary) or rejects/fails
   6. You get notified of each status change
 
-Use bifrost_send for CONVERSATION. Use bifrost_create_task for WORK REQUESTS.
+Use bifrost_send for CONVERSATION. Use bifrost_request_task for WORK REQUESTS.
 If another agent asks you to implement something via bifrost_send, suggest they
-create a task instead so the work is tracked.
+request a task instead so the work is tracked.
 
 CHANNELS: Subscribe to broadcast topics with bifrost_subscribe (e.g. "channel:deploys").
 DND: Use bifrost_dnd to pause incoming messages when you need focus.`

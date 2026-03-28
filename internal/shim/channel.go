@@ -302,22 +302,42 @@ func listenHubNotifications(ctx context.Context, mux *hubMux, nw *notificationWr
 			}
 
 			switch envelope.Type {
-			case "message.new":
-				var msg protocol.Message
-				if err := json.Unmarshal(envelope.Payload, &msg); err != nil {
-					log.Warn("unmarshal message payload failed", "error", err)
+			case "event.new":
+				var ev protocol.Event
+				if err := json.Unmarshal(envelope.Payload, &ev); err != nil {
+					log.Warn("unmarshal event payload failed", "error", err)
 					continue
 				}
-				cp.Content = msg.Body
-				cp.Meta["from"] = msg.From
-				cp.Meta["type"] = string(msg.Type)
-				cp.Meta["conversation"] = msg.ConversationID
-				cp.Meta["ts"] = msg.Timestamp.Format("2006-01-02T15:04:05Z07:00")
-				if msg.InReplyTo != "" {
-					cp.Meta["in_reply_to"] = msg.InReplyTo
-				}
-				if msg.NoReply {
-					cp.Meta["noreply"] = "true"
+				switch ev.Type {
+				case protocol.EventTypeMessage:
+					cp.Content = ev.Data.Body
+					cp.Meta["from"] = ev.FromAgent
+					cp.Meta["type"] = string(ev.Data.MessageType)
+					cp.Meta["conversation"] = ev.ConversationID
+					cp.Meta["ts"] = ev.Timestamp.Format("2006-01-02T15:04:05Z07:00")
+					if ev.Data.InReplyTo != "" {
+						cp.Meta["in_reply_to"] = ev.Data.InReplyTo
+					}
+				case protocol.EventTypeStatus:
+					cp.Content = fmt.Sprintf("Task status: %s", ev.Data.NewStatus)
+					cp.Meta["event"] = "task_updated"
+					cp.Meta["conversation"] = ev.ConversationID
+					cp.Meta["status"] = string(ev.Data.NewStatus)
+					if ev.Data.Summary != "" {
+						cp.Meta["summary"] = ev.Data.Summary
+					}
+					if ev.Data.Reason != "" {
+						cp.Meta["reason"] = ev.Data.Reason
+					}
+				case protocol.EventTypeFile:
+					cp.Content = fmt.Sprintf("File: %s (%d bytes)", ev.Data.Filename, ev.Data.Size)
+					cp.Meta["event"] = "file"
+					cp.Meta["conversation"] = ev.ConversationID
+					cp.Meta["filename"] = ev.Data.Filename
+				default:
+					cp.Content = fmt.Sprintf("Event: %s in %s", ev.Type, ev.ConversationID)
+					cp.Meta["event"] = string(ev.Type)
+					cp.Meta["conversation"] = ev.ConversationID
 				}
 			case "agent.registered":
 				var agent protocol.Agent
@@ -342,37 +362,17 @@ func listenHubNotifications(ctx context.Context, mux *hubMux, nw *notificationWr
 				cp.Meta["agent"] = info["agent_id"]
 				cp.Meta["event"] = "agent_left"
 			case "task_requested":
-				var task protocol.Task
+				var task protocol.TaskView
 				if err := json.Unmarshal(envelope.Payload, &task); err != nil {
 					log.Warn("unmarshal task_requested payload failed", "error", err)
 					continue
 				}
-				cp.Content = fmt.Sprintf("Task requested: %s\n%s", task.Title, task.Description)
+				cp.Content = fmt.Sprintf("Task requested: %s", task.Title)
 				cp.Meta["event"] = "task_requested"
-				cp.Meta["task_id"] = task.TaskID
+				cp.Meta["task_id"] = task.ConversationID
 				cp.Meta["title"] = task.Title
 				cp.Meta["requester"] = task.Requester
 				cp.Meta["assignee"] = task.Assignee
-			case "task_updated":
-				var task protocol.Task
-				if err := json.Unmarshal(envelope.Payload, &task); err != nil {
-					log.Warn("unmarshal task_updated payload failed", "error", err)
-					continue
-				}
-				cp.Content = fmt.Sprintf("Task %s updated: status=%s", task.TaskID, task.Status)
-				cp.Meta["event"] = "task_updated"
-				cp.Meta["task_id"] = task.TaskID
-				cp.Meta["status"] = string(task.Status)
-				if task.Title != "" {
-					cp.Meta["title"] = task.Title
-				}
-				cp.Meta["assignee"] = task.Assignee
-				if task.Summary != "" {
-					cp.Meta["summary"] = task.Summary
-				}
-				if task.Reason != "" {
-					cp.Meta["reason"] = task.Reason
-				}
 			case "ping":
 				var info map[string]string
 				if err := json.Unmarshal(envelope.Payload, &info); err != nil {
