@@ -312,3 +312,39 @@ Using `claude -p` (Claude Code in pipe/non-interactive mode):
 - Search by content, type, agent, time range
 - Useful for debugging multi-agent workflows
 ```
+
+## Claude Code Configuration
+
+### Direct MCP mode (no shim, connects to running hub)
+
+Requires: hub running with `--hub.mcp.enabled=true`
+
+```json
+{
+  "mcpServers": {
+    "bifrost": {
+      "type": "url",
+      "url": "http://localhost:7433/mcp"
+    }
+  }
+}
+```
+
+### Shim mode (recommended, auto-starts hub)
+
+```json
+{
+  "mcpServers": {
+    "bifrost": {
+      "command": "bifrost",
+      "args": ["shim"]
+    }
+  }
+}
+```
+
+### Plugin mode
+
+```bash
+claude --channels plugin:bifrost
+```
