@@ -18,6 +18,7 @@ func main() {
 	rootCmd.AddCommand(agentsCmd)
 	rootCmd.AddCommand(sendCmd)
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(newPeerCmd())
 
 	if err := rootCmd.Execute(); err != nil {
