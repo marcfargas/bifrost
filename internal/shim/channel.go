@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcfargas/bifrost/internal/hub"
 	"github.com/marcfargas/bifrost/internal/transport"
+	"github.com/marcfargas/bifrost/pkg/protocol"
 )
 
 // hubMux multiplexes reads on a hub connection, separating RPC responses
@@ -202,32 +203,21 @@ func listenHubNotifications(ctx context.Context, mux *hubMux, nw *notificationWr
 				continue
 			}
 
-			// Parse the notification params.
+			// The hub sends: {"type": "...", "payload": <object>}
+			// where type is "message.new", "agent.registered", "agent.deregistered",
+			// "task_requested", "task_updated", etc.
 			data, err := json.Marshal(notif.Params)
 			if err != nil {
 				log.Warn("marshal hub notification params failed", "error", err)
 				continue
 			}
 
-			var payload struct {
-				Type         string `json:"type"`
-				From         string `json:"from"`
-				Body         string `json:"body"`
-				Conversation string `json:"conversation_id"`
-				Timestamp    string `json:"timestamp"`
-				AgentName    string `json:"agent_name"`
-				TaskID       string `json:"task_id"`
-				Title        string `json:"title"`
-				Description  string `json:"description"`
-				MessageType  string `json:"message_type"`
-				Status       string `json:"status"`
-				Summary      string `json:"summary"`
-				Reason       string `json:"reason"`
-				Requester    string `json:"requester"`
-				Assignee     string `json:"assignee"`
+			var envelope struct {
+				Type    string          `json:"type"`
+				Payload json.RawMessage `json:"payload"`
 			}
-			if err := json.Unmarshal(data, &payload); err != nil {
-				log.Warn("unmarshal hub notification payload failed", "error", err)
+			if err := json.Unmarshal(data, &envelope); err != nil {
+				log.Warn("unmarshal hub notification envelope failed", "error", err)
 				continue
 			}
 
@@ -236,69 +226,69 @@ func listenHubNotifications(ctx context.Context, mux *hubMux, nw *notificationWr
 				Meta:    make(map[string]string),
 			}
 
-			switch payload.Type {
-			case "message":
-				cp.Message = payload.Body
-				cp.Meta["from"] = payload.From
-				if payload.MessageType != "" {
-					cp.Meta["type"] = payload.MessageType
+			switch envelope.Type {
+			case "message.new":
+				var msg protocol.Message
+				if err := json.Unmarshal(envelope.Payload, &msg); err != nil {
+					log.Warn("unmarshal message payload failed", "error", err)
+					continue
 				}
-				if payload.Conversation != "" {
-					cp.Meta["conversation"] = payload.Conversation
+				cp.Message = msg.Body
+				cp.Meta["from"] = msg.From
+				cp.Meta["type"] = string(msg.Type)
+				cp.Meta["conversation"] = msg.ConversationID
+				cp.Meta["ts"] = msg.Timestamp.Format("2006-01-02T15:04:05Z07:00")
+				if msg.InReplyTo != "" {
+					cp.Meta["in_reply_to"] = msg.InReplyTo
 				}
-				if payload.Timestamp != "" {
-					cp.Meta["ts"] = payload.Timestamp
+				if msg.NoReply {
+					cp.Meta["noreply"] = "true"
 				}
-			case "agent_joined":
-				cp.Message = fmt.Sprintf("Agent %s has joined", payload.AgentName)
-				cp.Meta["agent"] = payload.AgentName
+			case "agent.registered":
+				var agent protocol.Agent
+				json.Unmarshal(envelope.Payload, &agent)
+				name := agent.ProjectName
+				if agent.DisplayName != "" {
+					name = agent.DisplayName
+				}
+				cp.Message = fmt.Sprintf("Agent %s has joined", name)
+				cp.Meta["agent"] = name
 				cp.Meta["event"] = "agent_joined"
-			case "agent_left":
-				cp.Message = fmt.Sprintf("Agent %s has left", payload.AgentName)
-				cp.Meta["agent"] = payload.AgentName
+			case "agent.deregistered":
+				var info map[string]string
+				json.Unmarshal(envelope.Payload, &info)
+				cp.Message = fmt.Sprintf("Agent %s has left", info["agent_id"])
+				cp.Meta["agent"] = info["agent_id"]
 				cp.Meta["event"] = "agent_left"
 			case "task_requested":
-				cp.Message = fmt.Sprintf("Task requested: %s", payload.Title)
+				var task protocol.Task
+				json.Unmarshal(envelope.Payload, &task)
+				cp.Message = fmt.Sprintf("Task requested: %s\n%s", task.Title, task.Description)
 				cp.Meta["event"] = "task_requested"
-				if payload.TaskID != "" {
-					cp.Meta["task_id"] = payload.TaskID
+				cp.Meta["task_id"] = task.TaskID
+				cp.Meta["title"] = task.Title
+				cp.Meta["requester"] = task.Requester
+				cp.Meta["assignee"] = task.Assignee
+			case "task_updated":
+				var task protocol.Task
+				json.Unmarshal(envelope.Payload, &task)
+				cp.Message = fmt.Sprintf("Task %s updated: status=%s", task.TaskID, task.Status)
+				cp.Meta["event"] = "task_updated"
+				cp.Meta["task_id"] = task.TaskID
+				cp.Meta["status"] = string(task.Status)
+				if task.Title != "" {
+					cp.Meta["title"] = task.Title
 				}
-				if payload.Title != "" {
-					cp.Meta["title"] = payload.Title
+				cp.Meta["assignee"] = task.Assignee
+				if task.Summary != "" {
+					cp.Meta["summary"] = task.Summary
 				}
-				if payload.Description != "" {
-					cp.Meta["description"] = payload.Description
-				}
-				if payload.Requester != "" {
-					cp.Meta["requester"] = payload.Requester
-				}
-				if payload.Assignee != "" {
-					cp.Meta["assignee"] = payload.Assignee
-				}
-			case "task_update":
-				cp.Message = fmt.Sprintf("Task %s updated: status=%s", payload.TaskID, payload.Status)
-				cp.Meta["event"] = "task_update"
-				if payload.TaskID != "" {
-					cp.Meta["task_id"] = payload.TaskID
-				}
-				if payload.Status != "" {
-					cp.Meta["status"] = payload.Status
-				}
-				if payload.Title != "" {
-					cp.Meta["title"] = payload.Title
-				}
-				if payload.Summary != "" {
-					cp.Meta["summary"] = payload.Summary
-				}
-				if payload.Reason != "" {
-					cp.Meta["reason"] = payload.Reason
-				}
-				if payload.Assignee != "" {
-					cp.Meta["assignee"] = payload.Assignee
+				if task.Reason != "" {
+					cp.Meta["reason"] = task.Reason
 				}
 			default:
 				cp.Message = string(data)
-				cp.Meta["event"] = payload.Type
+				cp.Meta["event"] = envelope.Type
 			}
 
 			if err := nw.writeNotification("notifications/claude/channel", cp); err != nil {
