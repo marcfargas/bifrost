@@ -3,6 +3,7 @@ package shim
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,11 +15,19 @@ import (
 	"github.com/marcfargas/bifrost/pkg/protocol"
 )
 
+// errReconnecting is returned by rpcCall when the hub connection is being
+// re-established after a drop.
+var errReconnecting = errors.New("reconnecting to hub")
+
 // hubMux multiplexes reads on a hub connection, separating RPC responses
 // (messages with an "id" field) from unsolicited notifications (no "id").
 type hubMux struct {
-	conn *transport.Conn
-	log  *slog.Logger
+	log *slog.Logger
+
+	// connMu protects conn. rpcCall holds a read lock while sending;
+	// reconnect holds the write lock while swapping the connection.
+	connMu sync.RWMutex
+	conn   *transport.Conn
 
 	// pending tracks outstanding RPC calls: id -> response channel.
 	mu      sync.Mutex
@@ -27,6 +36,12 @@ type hubMux struct {
 
 	// notifications is the channel for hub push notifications.
 	notifications chan hub.RPCNotification
+
+	// disconnected is closed by readLoop when the connection drops.
+	// The reconnection goroutine in shim.go watches this channel.
+	// A new channel is created before each reconnect attempt.
+	disconnected chan struct{}
+	discMu       sync.Mutex // protects replacement of disconnected
 }
 
 // newHubMux creates a multiplexer and starts a background read loop.
@@ -37,9 +52,39 @@ func newHubMux(ctx context.Context, conn *transport.Conn, log *slog.Logger) *hub
 		log:           log,
 		pending:       make(map[uint64]chan<- hub.RPCResponse),
 		notifications: make(chan hub.RPCNotification, 64),
+		disconnected:  make(chan struct{}),
 	}
 	go m.readLoop(ctx)
 	return m
+}
+
+// disconnectedCh returns the current disconnected channel (safe to call
+// concurrently — reads under discMu).
+func (m *hubMux) disconnectedCh() <-chan struct{} {
+	m.discMu.Lock()
+	defer m.discMu.Unlock()
+	return m.disconnected
+}
+
+// signalDisconnect closes the current disconnected channel once.
+// It then installs a fresh (open) channel so the reconnection goroutine
+// can arm itself again for the next drop.
+func (m *hubMux) signalDisconnect() {
+	m.discMu.Lock()
+	ch := m.disconnected
+	m.disconnected = make(chan struct{})
+	m.discMu.Unlock()
+	close(ch)
+}
+
+// swapConn replaces the underlying connection under the write lock and
+// returns the old connection so the caller can close it.
+func (m *hubMux) swapConn(newConn *transport.Conn) *transport.Conn {
+	m.connMu.Lock()
+	defer m.connMu.Unlock()
+	old := m.conn
+	m.conn = newConn
+	return old
 }
 
 // rpcCall sends a JSON-RPC request to the hub and waits for the response.
@@ -57,6 +102,10 @@ func (m *hubMux) rpcCall(ctx context.Context, method string, params any) (*hub.R
 		m.mu.Unlock()
 	}()
 
+	// Capture the disconnect channel BEFORE sending so that if the connection
+	// drops between the send and the select, we still observe the close.
+	discCh := m.disconnectedCh()
+
 	paramsJSON, err := json.Marshal(params)
 	if err != nil {
 		return nil, fmt.Errorf("marshal params: %w", err)
@@ -69,27 +118,56 @@ func (m *hubMux) rpcCall(ctx context.Context, method string, params any) (*hub.R
 		Params:  paramsJSON,
 	}
 
-	if err := m.conn.Send(req); err != nil {
-		return nil, fmt.Errorf("send rpc: %w", err)
+	// Acquire read lock only for the send so reconnect (write lock) can proceed.
+	m.connMu.RLock()
+	if m.conn == nil {
+		m.connMu.RUnlock()
+		return nil, errReconnecting
+	}
+	sendErr := m.conn.Send(req)
+	m.connMu.RUnlock()
+
+	if sendErr != nil {
+		return nil, fmt.Errorf("send rpc: %w", sendErr)
 	}
 
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	case <-discCh:
+		return nil, errReconnecting
 	case resp := <-ch:
 		return &resp, nil
 	}
 }
 
 // readLoop continuously reads from the hub connection and dispatches messages.
+// When the connection drops it signals disconnected and returns.
 func (m *hubMux) readLoop(ctx context.Context) {
 	for {
 		var raw json.RawMessage
-		if err := m.conn.Receive(&raw); err != nil {
-			if ctx.Err() != nil || err == io.EOF {
+
+		m.connMu.RLock()
+		conn := m.conn
+		m.connMu.RUnlock()
+
+		if conn == nil {
+			return
+		}
+
+		if err := conn.Receive(&raw); err != nil {
+			if ctx.Err() != nil {
+				// Context cancelled — clean shutdown, no reconnect needed.
 				return
 			}
-			m.log.Error("hub read error", "error", err)
+			if err != io.EOF {
+				m.log.Error("hub read error", "error", err)
+			}
+			// Connection dropped — signal disconnect. Any rpcCall goroutines
+			// blocked in their select will wake up on the disconnect channel
+			// and return errReconnecting. drainPending is no longer needed
+			// because all rpcCall goroutines watch disconnectedCh.
+			m.signalDisconnect()
 			return
 		}
 

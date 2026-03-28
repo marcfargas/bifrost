@@ -183,7 +183,11 @@ func Run(ctx context.Context, opts Options) error {
 	defer heartbeatCancel()
 	go runHeartbeat(heartbeatCtx, mux, agentID, log)
 
-	// 13. Wait for MCP server to finish (stdin closed).
+	// 13. Start the reconnection goroutine. It watches the disconnected channel
+	// on the mux and re-establishes the hub connection when it drops.
+	go runReconnect(ctx, mux, agent, nw, log)
+
+	// 14. Wait for MCP server to finish (stdin closed).
 	return <-mcpErr
 }
 
@@ -201,6 +205,88 @@ func runHeartbeat(ctx context.Context, mux *hubMux, agentID string, log *slog.Lo
 			if err != nil {
 				log.Warn("heartbeat failed", "error", err)
 			}
+		}
+	}
+}
+
+// reconnectBackoff returns the backoff duration for the given attempt number
+// (0-based). Starts at 1 s, doubles each attempt, capped at 30 s.
+func reconnectBackoff(attempt int) time.Duration {
+	const (
+		base = time.Second
+		max  = 30 * time.Second
+	)
+	d := base << uint(attempt) // 1s, 2s, 4s, 8s, 16s, 32s…
+	if d > max || d <= 0 {     // guard overflow
+		return max
+	}
+	return d
+}
+
+// runReconnect watches the mux's disconnected channel and re-establishes the
+// hub connection when it drops. After a successful reconnect it re-registers
+// the agent and emits a channel notification to Claude Code.
+func runReconnect(ctx context.Context, mux *hubMux, agent *protocol.Agent, nw *notificationWriter, log *slog.Logger) {
+	for {
+		// Wait for a disconnect signal or context cancellation.
+		select {
+		case <-ctx.Done():
+			return
+		case <-mux.disconnectedCh():
+		}
+
+		log.Warn("hub connection lost — reconnecting")
+
+		// Attempt reconnection with exponential backoff.
+		for attempt := 0; ; attempt++ {
+			backoff := reconnectBackoff(attempt)
+			log.Warn("reconnect attempt", "attempt", attempt+1, "backoff", backoff)
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+
+			newConn, err := connectToHub(ctx)
+			if err != nil {
+				log.Warn("reconnect failed", "attempt", attempt+1, "error", err)
+				continue
+			}
+
+			// Swap in the new connection under write lock, close the old one.
+			old := mux.swapConn(newConn)
+			if old != nil {
+				_ = old.Close()
+			}
+
+			// Start a new read loop on the fresh connection.
+			go mux.readLoop(ctx)
+
+			// Re-register with the hub.
+			regResp, regErr := mux.rpcCall(ctx, "hub.register", agent)
+			if regErr != nil {
+				log.Warn("re-register failed after reconnect", "error", regErr)
+				// Swap back to nil so rpcCall returns errReconnecting, then retry.
+				_ = mux.swapConn(nil)
+				if newConn != nil {
+					_ = newConn.Close()
+				}
+				continue
+			}
+			if regResp.Error != nil {
+				log.Warn("re-register RPC error after reconnect", "msg", regResp.Error.Message)
+			}
+
+			log.Info("reconnected and re-registered with hub", "agent_id", agent.AgentID)
+
+			// Notify Claude Code that the connection has been restored.
+			_ = nw.writeNotification("notifications/claude/channel", channelNotificationParams{
+				Content: "Reconnected to bifrost hub",
+				Meta:    map[string]string{"event": "reconnected"},
+			})
+
+			break // success — outer loop will arm the next disconnect watch
 		}
 	}
 }
