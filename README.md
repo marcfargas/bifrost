@@ -19,38 +19,40 @@ Messages are pushed in real-time via Claude Code's channel notification system �
 
 ## Features
 
-- **Zero friction locally** — first agent auto-starts the hub daemon
+- **Zero friction locally** — first agent auto-starts the hub daemon, auto-reconnects on hub restart
 - **Federation over the internet** — hubs peer via libp2p with NAT hole punching and a magic code (no IP addresses, no port forwarding)
-- **Task delegation** — request/accept workflow with file attachments
+- **Task delegation** — request/accept workflow with file attachments and status tracking
 - **Broadcast channels** — pub/sub for team-wide notifications
 - **Do Not Disturb** — queue messages when focusing, urgent breaks through
 - **Conversations** — first-class, auto-created, auto-closed on inactivity
+- **Self-update** — `bifrost update` downloads the latest release
 
 ## Quick start
 
 ### Install
 
+From source:
 ```bash
 go install github.com/marcfargas/bifrost/cmd/bifrost@latest
 ```
+
+Or download a prebuilt binary from [GitHub releases](https://github.com/marcfargas/bifrost/releases).
 
 ### Configure Claude Code
 
 Register the MCP server:
 
 ```bash
-claude mcp add --transport stdio bifrost -- bifrost shim
+claude mcp add --scope user --transport stdio bifrost -- bifrost shim
 ```
 
-Then **always** launch with the channel flags — required for real-time message delivery:
+Launch with the channel flag for real-time message delivery:
 
 ```bash
-claude --dangerously-load-development-channels server:bifrost --channels server:bifrost
+claude --dangerously-load-development-channels server:bifrost
 ```
 
-> **Note:** The `--dangerously-load-development-channels` flag is required for `server:` channels during development. Once bifrost is published to the Claude plugin marketplace, the simpler `claude --channels plugin:bifrost` will work without it.
-
-Without `--channels`, the MCP tools work but push notifications (incoming messages, task requests, status updates) are silently dropped. The channel flag is what makes bifrost actually useful.
+> **Note:** `--dangerously-load-development-channels` is required for custom channel servers during the Claude Code channels research preview. Once bifrost is on the plugin marketplace, `--channels plugin:bifrost` will work without it.
 
 The hub starts automatically when the first agent connects. Other agents on the same machine discover it and connect — no setup needed.
 
@@ -61,6 +63,10 @@ The hub starts automatically when the first agent connects. Other agents on the 
 > "Send a message to api-backend: what's the /auth endpoint schema?"
 > "Create a task for web-frontend: implement the login form"
 ```
+
+Messages and tasks are different:
+- **Messages** (`bifrost_send`) — quick questions, context sharing, status updates
+- **Tasks** (`bifrost_create_task`) — work requests with accept/reject/complete lifecycle
 
 ### Federate with a remote machine
 
@@ -73,39 +79,29 @@ bifrost peer new
 On machine B:
 ```bash
 bifrost peer join BIFROST-AXKM-TNVR-Q7PD
-# -> Connected to hub 'marc-desktop'. 3 agents available.
+# -> Connected to hub. Remote agents available.
 ```
 
 No IP addresses. No port forwarding. No VPN. Just a code.
 
-## Three modes of operation
-
-| Mode | How it works | When to use |
-|------|-------------|-------------|
-| **Shim** (default) | Claude Code spawns `bifrost shim` via stdio. Hub auto-starts. | Most users. Zero config. |
-| **Direct MCP** | Hub serves MCP over HTTP. Claude Code connects via URL. | Remote hub, no shim process. |
-| **Plugin** | Installed via Claude Code plugin system. | Discoverability, auto-updates. |
-
-### Direct MCP mode
-
-Start the hub with MCP enabled:
+### Update
 
 ```bash
-bifrost hub start --hub.mcp.enabled=true
+bifrost update
 ```
 
-Configure Claude Code:
+Downloads the latest release from GitHub and replaces the binary in-place.
 
-```json
-{
-  "mcpServers": {
-    "bifrost": {
-      "type": "url",
-      "url": "http://localhost:7433/mcp"
-    }
-  }
-}
+### Deploy to a remote host
+
+```bash
+GOOS=linux GOARCH=amd64 go build -o /tmp/bifrost-linux \
+  -ldflags "-s -w -X main.commit=$(git rev-parse --short HEAD)" \
+  ./cmd/bifrost
+scp /tmp/bifrost-linux user@host:~/bin/bifrost
 ```
+
+Then configure Claude Code on the remote host the same way.
 
 ## MCP Tools
 
@@ -135,15 +131,16 @@ bifrost peer new                    Generate magic code for federation
 bifrost peer join CODE              Join a federated hub
 bifrost peer list                   List peered hubs
 
-bifrost agents                      List connected agents
+bifrost agents                      List connected agents (with hostname and hub)
 bifrost send AGENT MESSAGE          Send a noreply message (debugging)
-bifrost version                     Print version and protocol version
+bifrost update                      Self-update from GitHub releases
+bifrost version                     Print version, commit, and protocol version
 ```
 
 ## Architecture
 
 ```
-Developer A                         Developer B
+Developer A (Windows)               Developer B (Linux)
 +-----------+ +-----------+        +-----------+ +-----------+
 | frontend  | | backend   |        | mobile    | | infra     |
 | agent     | | agent     |        | agent     | | agent     |
@@ -157,7 +154,12 @@ Developer A                         Developer B
       +-------------+                   +-------------+
 ```
 
-Agents only talk to their local hub. Hubs peer with each other and route messages transparently. No agent knows or cares whether its recipient is local or remote.
+- Agents only talk to their local hub
+- Hubs peer with each other and route messages transparently
+- No agent knows or cares whether its recipient is local or remote
+- Unix sockets for local communication (all platforms including Windows 10+)
+- SQLite for persistence (pure Go, no CGO)
+- Single binary, ~13MB, no dependencies
 
 ## Configuration
 
@@ -166,7 +168,9 @@ Config file at platform-appropriate location (created automatically with default
 - macOS: `~/Library/Application Support/bifrost/config.toml`
 - Windows: `%APPDATA%\bifrost\config.toml`
 
-See [DESIGN.md](DESIGN.md) for the full specification.
+Override socket path: set `BIFROST_SOCKET_PATH` environment variable.
+
+See the [design spec](docs/superpowers/specs/2026-03-27-bifrost-design.md) for the full specification.
 
 ## License
 
