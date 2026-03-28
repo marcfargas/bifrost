@@ -603,11 +603,23 @@ ON CONFLICT(target_type, target_id, conversation_id) DO UPDATE SET
 }
 
 func (s *SQLiteStore) ListPendingDelivery(ctx context.Context, targetType, targetID string) ([]DeliveryMark, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT conversation_id, last_event_id FROM delivery_state
-         WHERE target_type = ? AND target_id = ?`,
-		targetType, targetID,
+	var (
+		rows *sql.Rows
+		err  error
 	)
+	if targetID == "" {
+		rows, err = s.db.QueryContext(ctx,
+			`SELECT target_id, conversation_id, last_event_id FROM delivery_state
+             WHERE target_type = ?`,
+			targetType,
+		)
+	} else {
+		rows, err = s.db.QueryContext(ctx,
+			`SELECT target_id, conversation_id, last_event_id FROM delivery_state
+             WHERE target_type = ? AND target_id = ?`,
+			targetType, targetID,
+		)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -615,7 +627,7 @@ func (s *SQLiteStore) ListPendingDelivery(ctx context.Context, targetType, targe
 	var marks []DeliveryMark
 	for rows.Next() {
 		var m DeliveryMark
-		if err := rows.Scan(&m.ConversationID, &m.LastEventID); err != nil {
+		if err := rows.Scan(&m.TargetID, &m.ConversationID, &m.LastEventID); err != nil {
 			return nil, err
 		}
 		marks = append(marks, m)

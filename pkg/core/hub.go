@@ -52,6 +52,7 @@ type Hub struct {
 	channels      *ChannelManager
 	dnd           *DNDManager
 	conversations *ConversationManager
+	syncEngine    *SyncEngine
 }
 
 // NewHub creates a Hub backed by the given store and wires agent registry,
@@ -158,3 +159,17 @@ func (h *Hub) Conversations() *ConversationManager { return h.conversations }
 
 // Store returns the underlying store.
 func (h *Hub) Store() store.Store { return h.store }
+
+// SetSyncEngine attaches a SyncEngine to the hub. Safe to call before use.
+func (h *Hub) SetSyncEngine(e *SyncEngine) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.syncEngine = e
+}
+
+// Sync returns the SyncEngine (may be nil if not configured).
+func (h *Hub) Sync() *SyncEngine {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.syncEngine
+}

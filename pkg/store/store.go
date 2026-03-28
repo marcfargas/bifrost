@@ -49,6 +49,7 @@ type ConversationFilter struct {
 
 // DeliveryMark holds one row from delivery_state.
 type DeliveryMark struct {
+	TargetID       string
 	ConversationID string
 	LastEventID    string
 }

@@ -384,6 +384,16 @@ func (s *SQLiteStore) TouchConversation(ctx context.Context, conversationID stri
 	return nil
 }
 
+// SetLastActivity is a test helper that back-dates the created_at of a conversation.
+// It exists to satisfy conversations_test.go which was written before last_activity was removed.
+func (s *SQLiteStore) SetLastActivity(ctx context.Context, conversationID string, t time.Time) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET created_at = ? WHERE id = ?`,
+		fmtTime(t), conversationID,
+	)
+	return err
+}
+
 func (s *SQLiteStore) ListStaleConversations(ctx context.Context, before time.Time) ([]*protocol.Conversation, error) {
 	// last_activity column no longer exists; returns empty list.
 	return nil, nil
