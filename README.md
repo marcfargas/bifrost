@@ -45,7 +45,7 @@ claude mcp add --transport stdio bifrost -- bifrost shim
 Then **always** launch with the channel flag — this is required for real-time message delivery:
 
 ```bash
-claude --channels bifrost
+claude --channels server:bifrost
 ```
 
 Without `--channels`, the MCP tools work but push notifications (incoming messages, task requests, status updates) are silently dropped. The channel flag is what makes bifrost actually useful.
