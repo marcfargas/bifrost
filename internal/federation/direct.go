@@ -61,8 +61,10 @@ func (t *DirectTransport) Name() string { return "direct" }
 
 // Start begins listening for incoming direct connections.
 func (t *DirectTransport) Start(ctx context.Context, incoming chan<- PeerConn) error {
+	t.mu.Lock()
 	ctx, t.cancel = context.WithCancel(ctx)
 	t.incoming = incoming
+	t.mu.Unlock()
 
 	var listener net.Listener
 	var err error
@@ -306,11 +308,16 @@ func (t *DirectTransport) Connect(ctx context.Context, address string) (PeerConn
 
 // Stop shuts down the direct transport.
 func (t *DirectTransport) Stop() error {
-	if t.cancel != nil {
-		t.cancel()
+	t.mu.RLock()
+	cancel := t.cancel
+	listener := t.listener
+	t.mu.RUnlock()
+
+	if cancel != nil {
+		cancel()
 	}
-	if t.listener != nil {
-		t.listener.Close()
+	if listener != nil {
+		listener.Close()
 	}
 	t.wg.Wait()
 	return nil
