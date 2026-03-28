@@ -24,10 +24,11 @@ func Defaults() Config {
 			MaxFileSize: 10 * 1024 * 1024, // 10 MB
 		},
 		Retention: RetentionConfig{
-			Messages:       Duration{30 * 24 * time.Hour}, // 30d
-			CompletedTasks: Duration{90 * 24 * time.Hour}, // 90d
-			Attachments:    Duration{30 * 24 * time.Hour}, // 30d
-			Conversations:  Duration{90 * 24 * time.Hour}, // 90d
+			Messages:        Duration{30 * 24 * time.Hour}, // 30d
+			CompletedTasks:  Duration{90 * 24 * time.Hour}, // 90d
+			Attachments:     Duration{30 * 24 * time.Hour}, // 30d
+			Conversations:   Duration{90 * 24 * time.Hour}, // 90d
+			AgentOfflineTTL: Duration{24 * time.Hour},      // 24h
 		},
 		Conversations: ConversationsConfig{
 			InactivityTimeout: Duration{10 * time.Minute},

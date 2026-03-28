@@ -87,6 +87,8 @@ func (h *Handler) Handle(ctx context.Context, conn *transport.Conn, req *RPCRequ
 		return h.handlePeerJoin(ctx, req)
 	case "peer.list":
 		return h.handlePeerList(ctx, req)
+	case "hub.remove_agent":
+		return h.handleRemoveAgent(ctx, req)
 	default:
 		return rpcError(req.ID, -32601, "method not found")
 	}
@@ -660,6 +662,72 @@ func (h *Handler) handlePeerList(ctx context.Context, req *RPCRequest) *RPCRespo
 		JSONRPC: "2.0",
 		ID:      req.ID,
 		Result:  map[string]any{"peers": peers},
+	}
+}
+
+// handleRemoveAgent removes an agent from the hub by agent_id or name.
+// It resolves names to IDs via Agents().Resolve, deletes the agent from the
+// store, and removes it from the ConnManager.
+func (h *Handler) handleRemoveAgent(ctx context.Context, req *RPCRequest) *RPCResponse {
+	var params struct {
+		AgentID    string `json:"agent_id"`
+		Name       string `json:"name"`
+		AllOffline bool   `json:"all_offline"`
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return rpcError(req.ID, -32602, "invalid params: "+err.Error())
+	}
+
+	// --all-offline: remove every agent with status "offline".
+	if params.AllOffline {
+		agents, err := h.hub.Store().ListAgents(ctx, store.AgentFilter{Status: protocol.AgentStatusOffline})
+		if err != nil {
+			return rpcError(req.ID, -32000, "list offline agents failed: "+err.Error())
+		}
+		removed := make([]map[string]string, 0, len(agents))
+		for _, agent := range agents {
+			if delErr := h.hub.Store().DeleteAgent(ctx, agent.AgentID); delErr != nil {
+				return rpcError(req.ID, -32000, "delete agent failed: "+delErr.Error())
+			}
+			h.connMgr.Remove(agent.AgentID)
+			removed = append(removed, map[string]string{
+				"agent_id": agent.AgentID,
+				"name":     agent.DisplayName,
+			})
+		}
+		return &RPCResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result:  map[string]any{"removed": removed},
+		}
+	}
+
+	// Resolve by agent_id or name.
+	lookup := params.AgentID
+	if lookup == "" {
+		lookup = params.Name
+	}
+	if lookup == "" {
+		return rpcError(req.ID, -32602, "agent_id or name is required")
+	}
+
+	agent, err := h.hub.Agents().Resolve(ctx, lookup)
+	if err != nil {
+		return rpcError(req.ID, -32001, err.Error())
+	}
+
+	if err := h.hub.Store().DeleteAgent(ctx, agent.AgentID); err != nil {
+		return rpcError(req.ID, -32000, "delete agent failed: "+err.Error())
+	}
+	h.connMgr.Remove(agent.AgentID)
+
+	return &RPCResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result: map[string]string{
+			"agent_id": agent.AgentID,
+			"name":     agent.DisplayName,
+		},
 	}
 }
 

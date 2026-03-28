@@ -16,6 +16,7 @@ func main() {
 	rootCmd.AddCommand(hubCmd)
 	rootCmd.AddCommand(shimCmd)
 	rootCmd.AddCommand(agentsCmd)
+	rootCmd.AddCommand(agentCmd)
 	rootCmd.AddCommand(sendCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(updateCmd)

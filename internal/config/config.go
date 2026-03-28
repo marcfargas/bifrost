@@ -77,10 +77,11 @@ type StorageConfig struct {
 
 // RetentionConfig defines how long various data types are kept.
 type RetentionConfig struct {
-	Messages       Duration `toml:"messages"`
-	CompletedTasks Duration `toml:"completed_tasks"`
-	Attachments    Duration `toml:"attachments"`
-	Conversations  Duration `toml:"conversations"`
+	Messages        Duration `toml:"messages"`
+	CompletedTasks  Duration `toml:"completed_tasks"`
+	Attachments     Duration `toml:"attachments"`
+	Conversations   Duration `toml:"conversations"`
+	AgentOfflineTTL Duration `toml:"agent_offline_ttl"`
 }
 
 // ConversationsConfig holds conversation-level settings.
