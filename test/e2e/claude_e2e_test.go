@@ -445,7 +445,11 @@ func TestClaudeMCP_TwoAgentConversation(t *testing.T) {
 // This test documents the desired behavior and will pass once Claude Code
 // supports channel registration via --mcp-config.
 func TestClaudeMCP_ChannelPush(t *testing.T) {
-	t.Skip("--channels server:X requires server in user config, not --mcp-config — blocked on Claude Code platform")
+	// Channel push not yet working — see github.com/anthropics/claude-code/issues/40251
+	// The shim writes notifications/claude/channel as raw JSON-RPC to stdout.
+	// This may not be recognized by Claude Code. The TypeScript SDK's
+	// mcp.notification() goes through the transport layer, which may be required.
+	t.Skip("channel push blocked — raw JSON-RPC notifications not recognized by Claude Code (issue #40251)")
 	te := setupClaudeTest(t)
 
 	// Build the fakesender binary.
@@ -510,15 +514,27 @@ func TestClaudeMCP_ChannelPush(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	// The --dangerously-load-development-channels flag needs the server in
+	// .mcp.json (project config), not --mcp-config. Write a .mcp.json in
+	// the working directory so claude discovers it.
+	mcpDotJSON, _ := json.MarshalIndent(map[string]any{
+		"mcpServers": map[string]any{
+			"bifrost": map[string]any{
+				"command": te.bifrostBin,
+				"args":    []string{"shim"},
+			},
+		},
+	}, "", "  ")
+	if err := os.WriteFile(filepath.Join(te.socketDir, ".mcp.json"), mcpDotJSON, 0o644); err != nil {
+		t.Fatalf("write .mcp.json: %v", err)
+	}
+
 	args := []string{
-		"--bare",
 		"--dangerously-skip-permissions",
 		"--dangerously-load-development-channels", "server:bifrost",
-		"--channels", "server:bifrost",
-		"-p", "First call bifrost_whoami to register. Then wait 5 seconds using the Bash tool (run 'sleep 5'). After waiting, report any <channel> notifications you received. If you see a message containing 'CHANNEL_PUSH_TEST_MESSAGE', output exactly 'PUSH_RECEIVED'. If no channel messages, output 'NO_PUSH'.",
+		"-p", "First call bifrost_whoami to register. Then wait 5 seconds using the Bash tool (run 'sleep 5'). After waiting, report any <channel> notifications you received from bifrost. If you see a message containing 'CHANNEL_PUSH_TEST_MESSAGE', output exactly 'PUSH_RECEIVED'. If no channel messages, output 'NO_PUSH'.",
 		"--model", "haiku",
 		"--max-turns", "8",
-		"--mcp-config", te.mcpConfigFlag(),
 	}
 
 	claudeCmd := exec.CommandContext(ctx, "claude", args...)
