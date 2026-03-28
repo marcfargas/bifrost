@@ -112,6 +112,16 @@ func (h *Handler) handleRegister(ctx context.Context, conn *transport.Conn, req 
 
 	h.connMgr.Add(agent.AgentID, conn)
 
+	// Send a welcome ping — proves the full notification loop works.
+	// Like IRC's PING/PONG: if the agent sees this, the channel is alive.
+	h.hub.NotifyAgent(agent.AgentID, core.Notification{
+		Type: "ping",
+		Payload: map[string]string{
+			"message": "PONG! Welcome to bifrost, " + agent.DisplayName,
+			"hub":     "local",
+		},
+	})
+
 	return &RPCResponse{
 		JSONRPC: "2.0",
 		ID:      req.ID,

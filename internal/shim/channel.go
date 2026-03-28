@@ -297,6 +297,17 @@ func listenHubNotifications(ctx context.Context, mux *hubMux, nw *notificationWr
 				if task.Reason != "" {
 					cp.Meta["reason"] = task.Reason
 				}
+			case "ping":
+				var info map[string]string
+				if err := json.Unmarshal(envelope.Payload, &info); err != nil {
+					log.Warn("unmarshal ping payload failed", "error", err)
+					continue
+				}
+				cp.Message = info["message"]
+				cp.Meta["event"] = "ping"
+				if hub, ok := info["hub"]; ok {
+					cp.Meta["hub"] = hub
+				}
 			default:
 				cp.Message = string(data)
 				cp.Meta["event"] = envelope.Type

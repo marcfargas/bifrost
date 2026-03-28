@@ -15,6 +15,109 @@ import (
 	"github.com/marcfargas/bifrost/pkg/store"
 )
 
+// TestPingOnConnect verifies that when an agent registers, the hub sends
+// a "ping" notification that arrives on the client socket — proving the
+// full notification loop (hub → ConnManager → socket → client) works.
+func TestPingOnConnect(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	s, err := store.NewSQLite(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	h := core.NewHub(s)
+	cm := hub.NewConnManager()
+	h.AddNotifier(cm)
+	handler := hub.NewHandler(h, cm)
+
+	ctx := context.Background()
+
+	// Create socket pair.
+	serverConn, clientConn := net.Pipe()
+	serverT := transport.NewConn(serverConn)
+	clientT := transport.NewConn(clientConn)
+	t.Cleanup(func() { serverConn.Close(); clientConn.Close() })
+
+	// Start reading on client side BEFORE registration (pipe is unbuffered).
+	type notification struct {
+		raw json.RawMessage
+		err error
+	}
+	notifCh := make(chan notification, 10)
+	go func() {
+		for {
+			var raw json.RawMessage
+			err := clientT.Receive(&raw)
+			notifCh <- notification{raw, err}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+
+	// Register via the handler (same as real hub does).
+	agentJSON, _ := json.Marshal(protocol.Agent{
+		AgentID:         "test-ping",
+		Username:        "marc",
+		Hostname:        "test",
+		LocalPath:       "/test",
+		ProjectName:     "test-project",
+		DisplayName:     "marc@test",
+		ProtocolVersion: protocol.ProtocolVersion,
+		ConnectedAt:     time.Now(),
+		LastSeen:        time.Now(),
+	})
+	req := &hub.RPCRequest{
+		JSONRPC: "2.0",
+		ID:      float64(1),
+		Method:  "hub.register",
+		Params:  agentJSON,
+	}
+	resp := handler.Handle(ctx, serverT, req)
+	if resp.Error != nil {
+		t.Fatalf("register failed: %s", resp.Error.Message)
+	}
+
+	// Wait for the ping notification.
+	select {
+	case n := <-notifCh:
+		if n.err != nil {
+			t.Fatalf("receive error: %v", n.err)
+		}
+		t.Logf("Received: %s", string(n.raw))
+
+		// Parse and verify it's a ping.
+		var rpcNotif hub.RPCNotification
+		json.Unmarshal(n.raw, &rpcNotif)
+		if rpcNotif.Method != "bifrost.notification" {
+			t.Fatalf("expected bifrost.notification, got %s", rpcNotif.Method)
+		}
+
+		paramsJSON, _ := json.Marshal(rpcNotif.Params)
+		var envelope struct {
+			Type    string          `json:"type"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		json.Unmarshal(paramsJSON, &envelope)
+		if envelope.Type != "ping" {
+			t.Fatalf("expected ping type, got %s", envelope.Type)
+		}
+
+		var info map[string]string
+		json.Unmarshal(envelope.Payload, &info)
+		if info["message"] == "" {
+			t.Error("ping message is empty")
+		}
+		t.Logf("Ping message: %s", info["message"])
+
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout: no ping notification received")
+	}
+}
+
 // TestNotificationPipeline tests the full path:
 // hub.Messages().Send → core.NotifyAgent → ConnManager.Notify → socket → JSON-RPC notification
 func TestNotificationPipeline(t *testing.T) {
