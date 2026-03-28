@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -31,6 +32,7 @@ type Server struct {
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
 	logger     *slog.Logger
+	logFile    *os.File                    // non-nil when hub.log was opened by NewServer
 	mcpHTTP    *transport.MCPHTTPTransport // nil if MCP HTTP is disabled
 	fedManager *federation.Manager         // nil if federation is disabled
 }
@@ -58,16 +60,31 @@ func NewServer(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 	cm := NewConnManager()
 	h.AddNotifier(cm)
 
-	if logger == nil {
-		logger = slog.Default()
+	// Open hub.log for append so operational events are persisted regardless
+	// of whether the hub runs in foreground or via autostart.
+	logPath := filepath.Join(dataDir, "hub.log")
+	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("server: open hub.log: %w", err)
 	}
+
+	if logger == nil {
+		// Write to both stderr and hub.log so `bifrost logs -f` works regardless
+		// of how the hub was started.
+		w := io.MultiWriter(os.Stderr, logFile)
+		logger = slog.New(slog.NewTextHandler(w, nil))
+	}
+
+	handler := NewHandler(h, cm)
+	handler.SetLogger(logger)
 
 	return &Server{
 		cfg:     cfg,
 		hub:     h,
 		connMgr: cm,
-		handler: NewHandler(h, cm),
+		handler: handler,
 		logger:  logger,
+		logFile: logFile,
 	}, nil
 }
 
@@ -137,6 +154,9 @@ func (s *Server) Stop() {
 	}
 	s.wg.Wait()
 	_ = s.hub.Store().Close()
+	if s.logFile != nil {
+		_ = s.logFile.Close()
+	}
 }
 
 // MCPHTTPPort returns the actual port the MCP HTTP transport is listening on.
@@ -210,6 +230,9 @@ func (s *Server) Run(ctx context.Context) error {
 	_ = s.listener.Close()
 	s.wg.Wait()
 	_ = s.hub.Store().Close()
+	if s.logFile != nil {
+		_ = s.logFile.Close()
+	}
 	s.removePIDFile()
 
 	return nil

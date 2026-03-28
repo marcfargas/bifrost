@@ -403,9 +403,13 @@ func (m *Manager) ForwardMessage(ctx context.Context, peerID string, msg *protoc
 	if err := m.sendToPeer(ctx, peerID, env); err != nil {
 		// Queue for later delivery
 		m.store.EnqueuePeerMessage(ctx, peerID, env)
+		m.logger.Info("message queued for peer (unreachable)",
+			"peer_id", peerID, "from", msg.From, "to", msg.To)
 		return protocol.DeliveryStatusQueuedUnreachable, nil
 	}
 
+	m.logger.Info("message forwarded to peer",
+		"peer_id", peerID, "from", msg.From, "to", msg.To)
 	return protocol.DeliveryStatusDelivered, nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/marcfargas/bifrost/internal/transport"
 	"github.com/marcfargas/bifrost/pkg/core"
@@ -30,11 +31,17 @@ type Handler struct {
 	hub     *core.Hub
 	connMgr *ConnManager
 	peers   PeerManager // nil if federation is not enabled
+	logger  *slog.Logger
 }
 
 // NewHandler creates a Handler backed by the given Hub and ConnManager.
 func NewHandler(h *core.Hub, cm *ConnManager) *Handler {
-	return &Handler{hub: h, connMgr: cm}
+	return &Handler{hub: h, connMgr: cm, logger: slog.Default()}
+}
+
+// SetLogger sets the logger used for event logging.
+func (h *Handler) SetLogger(l *slog.Logger) {
+	h.logger = l
 }
 
 // SetPeerManager sets the peer manager used by peer.* RPC handlers.
@@ -114,6 +121,12 @@ func (h *Handler) handleRegister(ctx context.Context, conn *transport.Conn, req 
 
 	h.connMgr.Add(agent.AgentID, conn)
 
+	h.logger.Info("agent connected",
+		"name", agent.DisplayName,
+		"project", agent.ProjectName,
+		"hostname", agent.Hostname,
+	)
+
 	// Send a welcome ping — proves the full notification loop works.
 	// Like IRC's PING/PONG: if the agent sees this, the channel is alive.
 	h.hub.NotifyAgent(agent.AgentID, core.Notification{
@@ -148,6 +161,8 @@ func (h *Handler) handleDeregister(ctx context.Context, req *RPCRequest) *RPCRes
 	}
 
 	h.connMgr.Remove(params.AgentID)
+
+	h.logger.Info("agent disconnected", "name", params.AgentID)
 
 	return &RPCResponse{
 		JSONRPC: "2.0",
@@ -222,6 +237,8 @@ func (h *Handler) handleSendMessage(ctx context.Context, req *RPCRequest) *RPCRe
 		return rpcError(req.ID, -32000, "send failed: "+err.Error())
 	}
 
+	h.logger.Info("message sent", "from", msg.From, "to", msg.To, "type", msg.Type)
+
 	return &RPCResponse{
 		JSONRPC: "2.0",
 		ID:      req.ID,
@@ -292,6 +309,12 @@ func (h *Handler) handleCreateTask(ctx context.Context, req *RPCRequest) *RPCRes
 		}
 	}
 
+	h.logger.Info("task created",
+		"title", task.Title,
+		"assignee", task.Assignee,
+		"requester", task.Requester,
+	)
+
 	return &RPCResponse{
 		JSONRPC: "2.0",
 		ID:      req.ID,
@@ -340,6 +363,8 @@ func (h *Handler) handleUpdateTask(ctx context.Context, req *RPCRequest) *RPCRes
 			}
 		}
 	}
+
+	h.logger.Info("task updated", "id", task.TaskID, "status", task.Status)
 
 	return &RPCResponse{
 		JSONRPC: "2.0",
@@ -690,6 +715,7 @@ func (h *Handler) handleRemoveAgent(ctx context.Context, req *RPCRequest) *RPCRe
 				return rpcError(req.ID, -32000, "delete agent failed: "+delErr.Error())
 			}
 			h.connMgr.Remove(agent.AgentID)
+			h.logger.Info("agent removed", "name", agent.DisplayName)
 			removed = append(removed, map[string]string{
 				"agent_id": agent.AgentID,
 				"name":     agent.DisplayName,
@@ -720,6 +746,8 @@ func (h *Handler) handleRemoveAgent(ctx context.Context, req *RPCRequest) *RPCRe
 		return rpcError(req.ID, -32000, "delete agent failed: "+err.Error())
 	}
 	h.connMgr.Remove(agent.AgentID)
+
+	h.logger.Info("agent removed", "name", agent.DisplayName)
 
 	return &RPCResponse{
 		JSONRPC: "2.0",
