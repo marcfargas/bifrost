@@ -200,25 +200,25 @@ func DataDir() string {
 	}
 }
 
-// SocketPath returns the platform-appropriate hub socket/pipe path.
+// SocketPath returns the platform-appropriate hub unix socket path.
+// Unix sockets work on all platforms (Linux, macOS, Windows 10+).
 //
-//   - Windows:  \\.\pipe\bifrost-hub
-//   - Linux/macOS: $XDG_RUNTIME_DIR/bifrost/hub.sock (fallback /tmp/bifrost-$UID/)
+//   - Windows:  %LOCALAPPDATA%/bifrost/hub.sock
+//   - Linux:    $XDG_RUNTIME_DIR/bifrost/hub.sock (fallback /tmp/bifrost-$UID/)
+//   - macOS:    $TMPDIR/bifrost/hub.sock
 func SocketPath() string {
-	if runtime.GOOS == "windows" {
-		return `\\.\pipe\bifrost-hub`
+	switch runtime.GOOS {
+	case "windows":
+		return filepath.Join(os.Getenv("LOCALAPPDATA"), "bifrost", "hub.sock")
+	case "darwin":
+		return filepath.Join(os.TempDir(), "bifrost", "hub.sock")
+	default:
+		runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
+		if runtimeDir != "" {
+			return filepath.Join(runtimeDir, "bifrost", "hub.sock")
+		}
+		return filepath.Join(os.TempDir(), fmt.Sprintf("bifrost-%d", os.Getuid()), "hub.sock")
 	}
-
-	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
-	if runtimeDir != "" {
-		return filepath.Join(runtimeDir, "bifrost", "hub.sock")
-	}
-
-	// Fallback: use /tmp/bifrost-<UID>/hub.sock
-	// On non-Windows we can read /proc/self/status or use a simpler approach:
-	// os.Getuid() is available on Unix.
-	uid := os.Getuid()
-	return fmt.Sprintf("/tmp/bifrost-%d/hub.sock", uid)
 }
 
 // PIDFilePath returns the path to the hub PID file.

@@ -7,9 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"os"
-	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,48 +18,12 @@ import (
 )
 
 // tryHubConnect attempts a single connection to the hub without auto-starting.
+// Uses unix domain sockets on all platforms (Linux, macOS, Windows 10+).
 func tryHubConnect() (*transport.Conn, error) {
-	if runtime.GOOS == "windows" {
-		return tryHubConnectWindows()
-	}
-	return tryHubConnectUnix()
-}
-
-func tryHubConnectUnix() (*transport.Conn, error) {
 	addr := config.SocketPath()
 	nc, err := net.Dial("unix", addr)
 	if err != nil {
-		return nil, err
-	}
-	return transport.NewConn(nc), nil
-}
-
-func tryHubConnectWindows() (*transport.Conn, error) {
-	pidPath := config.PIDFilePath()
-	data, err := os.ReadFile(pidPath)
-	if err != nil {
-		return nil, fmt.Errorf("read pid file: %w", err)
-	}
-
-	lines := strings.SplitN(strings.TrimSpace(string(data)), "\n", 2)
-	if len(lines) < 2 {
-		return nil, fmt.Errorf("malformed pid file")
-	}
-
-	pid, err := strconv.Atoi(strings.TrimSpace(lines[0]))
-	if err != nil {
-		return nil, fmt.Errorf("invalid pid in pid file: %w", err)
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return nil, fmt.Errorf("hub process %d not found: %w", pid, err)
-	}
-	_ = proc
-
-	addr := strings.TrimSpace(lines[1])
-	nc, err := net.Dial("tcp", addr)
-	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("connect to hub: %w", err)
 	}
 	return transport.NewConn(nc), nil
 }
