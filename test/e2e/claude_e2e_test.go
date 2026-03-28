@@ -445,11 +445,12 @@ func TestClaudeMCP_TwoAgentConversation(t *testing.T) {
 // This test documents the desired behavior and will pass once Claude Code
 // supports channel registration via --mcp-config.
 func TestClaudeMCP_ChannelPush(t *testing.T) {
-	// Channel push not yet working — see github.com/anthropics/claude-code/issues/40251
-	// The shim writes notifications/claude/channel as raw JSON-RPC to stdout.
-	// This may not be recognized by Claude Code. The TypeScript SDK's
-	// mcp.notification() goes through the transport layer, which may be required.
-	t.Skip("channel push blocked — raw JSON-RPC notifications not recognized by Claude Code (issue #40251)")
+	// Channels require claude.ai OAuth login — API key auth (used in CI) is not supported.
+	// See: https://code.claude.com/docs/en/channels ("They require claude.ai login.
+	// Console and API key authentication is not supported.")
+	// This test works locally with interactive claude sessions that are logged in.
+	// Run manually: go test -tags e2e ./test/e2e/ -run TestClaudeMCP_ChannelPush -v
+	t.Skip("channel push requires claude.ai login — cannot test with API key auth in CI")
 	te := setupClaudeTest(t)
 
 	// Build the fakesender binary.
