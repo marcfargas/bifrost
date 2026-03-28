@@ -36,24 +36,19 @@ go install github.com/marcfargas/bifrost/cmd/bifrost@latest
 
 ### Configure Claude Code
 
-Add to `.claude/settings.json`:
+Register the MCP server:
 
-```json
-{
-  "mcpServers": {
-    "bifrost": {
-      "command": "bifrost",
-      "args": ["shim"]
-    }
-  }
-}
+```bash
+claude mcp add --transport stdio bifrost -- bifrost shim
 ```
 
-Launch Claude Code with the channel flag:
+Then **always** launch with the channel flag — this is required for real-time message delivery:
 
 ```bash
 claude --channels bifrost
 ```
+
+Without `--channels`, the MCP tools work but push notifications (incoming messages, task requests, status updates) are silently dropped. The channel flag is what makes bifrost actually useful.
 
 The hub starts automatically when the first agent connects. Other agents on the same machine discover it and connect — no setup needed.
 
