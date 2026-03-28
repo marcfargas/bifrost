@@ -157,16 +157,16 @@ const (
 
 // Peer represents a remote Bifrost hub connected via federation.
 type Peer struct {
-	PeerID          string        `json:"peer_id"`
-	DisplayName     string        `json:"display_name,omitempty"`
-	Transport       PeerTransport `json:"transport"`
-	Address         string        `json:"address"`
-	Token           string        `json:"token,omitempty"`
-	Status          PeerStatus    `json:"status"`
-	LastSeen        time.Time     `json:"last_seen"`
-	ConnectedAt     time.Time     `json:"connected_at"`
-	FailCount       int           `json:"fail_count"`
-	ProtoVersion    string        `json:"proto_version"`
+	PeerID       string        `json:"peer_id"`
+	DisplayName  string        `json:"display_name,omitempty"`
+	Transport    PeerTransport `json:"transport"`
+	Address      string        `json:"address"`
+	Token        string        `json:"token,omitempty"`
+	Status       PeerStatus    `json:"status"`
+	LastSeen     time.Time     `json:"last_seen"`
+	ConnectedAt  time.Time     `json:"connected_at"`
+	FailCount    int           `json:"fail_count"`
+	ProtoVersion string        `json:"proto_version"`
 }
 
 // PeerEnvelope is the top-level wrapper for all peer-to-peer protocol messages.
@@ -220,7 +220,7 @@ type PeerHeartbeatPayload struct {
 
 // PeerResponse is the acknowledgement sent in reply to a peer envelope.
 type PeerResponse struct {
-	ID      string `json:"id"`
-	OK      bool   `json:"ok"`
-	Error   string `json:"error,omitempty"`
+	ID    string `json:"id"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
 }

@@ -17,11 +17,11 @@ import (
 
 // federatedPair holds two connected hubs with their federation managers.
 type federatedPair struct {
-	hubA, hubB   *core.Hub
-	storeA       *store.SQLiteStore
-	storeB       *store.SQLiteStore
-	mgrA, mgrB   *federation.Manager
-	dtA, dtB     *federation.DirectTransport
+	hubA, hubB *core.Hub
+	storeA     *store.SQLiteStore
+	storeB     *store.SQLiteStore
+	mgrA, mgrB *federation.Manager
+	dtA, dtB   *federation.DirectTransport
 }
 
 // setupManagers creates two hubs with federation managers and direct transports
@@ -183,11 +183,11 @@ func TestFederatedAgentSync(t *testing.T) {
 	// Register multiple agents on Hub A before connecting.
 	for i, name := range []string{"frontend", "api", "worker"} {
 		agent := &protocol.Agent{
-			AgentID:         fmt.Sprintf("a-%d", i),
-			ProjectName:     name,
-			Username:        "marc", Hostname: "marc-pc",
-			LocalPath:       "/dev/" + name,
-			ConnectedAt:     now, LastSeen: now,
+			AgentID:     fmt.Sprintf("a-%d", i),
+			ProjectName: name,
+			Username:    "marc", Hostname: "marc-pc",
+			LocalPath:   "/dev/" + name,
+			ConnectedAt: now, LastSeen: now,
 			ProtocolVersion: protocol.ProtocolVersion,
 		}
 		if err := fp.hubA.Agents().Register(ctx, agent); err != nil {

@@ -9,8 +9,8 @@ import (
 
 // AgentFilter contains optional filters for listing agents.
 type AgentFilter struct {
-	Status   protocol.AgentStatus // zero value means no filter
-	PeerHub  string               // filter by peer hub; empty means no filter
+	Status  protocol.AgentStatus // zero value means no filter
+	PeerHub string               // filter by peer hub; empty means no filter
 }
 
 // MessageFilter contains optional filters for listing messages.

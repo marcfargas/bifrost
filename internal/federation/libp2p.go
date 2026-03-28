@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"sync"
 
-
 	"github.com/ipfs/go-cid"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
@@ -27,7 +26,6 @@ const (
 
 	// BifrostDHTNamespace is the DHT namespace for magic code announcements.
 	BifrostDHTNamespace = "/bifrost/peer/"
-
 )
 
 // Libp2pTransport implements federation over libp2p with Noise encryption and DHT discovery.

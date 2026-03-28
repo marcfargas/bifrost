@@ -271,4 +271,3 @@ func (s *Server) writePIDFile(addr string) error {
 func (s *Server) removePIDFile() {
 	_ = os.Remove(config.PIDFilePath())
 }
-

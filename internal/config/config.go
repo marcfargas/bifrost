@@ -43,12 +43,12 @@ type Config struct {
 
 // HubConfig holds settings for the hub server.
 type HubConfig struct {
-	GracePeriod          Duration        `toml:"grace_period"`
-	HeartbeatInterval    Duration        `toml:"heartbeat_interval"`
-	HousekeepingInterval Duration        `toml:"housekeeping_interval"`
-	Local                LocalConfig     `toml:"local"`
-	TCP                  TCPConfig       `toml:"tcp"`
-	MCP                  MCPConfig       `toml:"mcp"`
+	GracePeriod          Duration    `toml:"grace_period"`
+	HeartbeatInterval    Duration    `toml:"heartbeat_interval"`
+	HousekeepingInterval Duration    `toml:"housekeeping_interval"`
+	Local                LocalConfig `toml:"local"`
+	TCP                  TCPConfig   `toml:"tcp"`
+	MCP                  MCPConfig   `toml:"mcp"`
 }
 
 // LocalConfig holds settings for the local (Unix socket / named pipe) transport.
@@ -90,8 +90,8 @@ type ConversationsConfig struct {
 
 // DNDConfig holds do-not-disturb settings.
 type DNDConfig struct {
-	ReminderInterval   Duration `toml:"reminder_interval"`
-	UrgentBreaksThrough bool    `toml:"urgent_breaks_through"`
+	ReminderInterval    Duration `toml:"reminder_interval"`
+	UrgentBreaksThrough bool     `toml:"urgent_breaks_through"`
 }
 
 // FederationConfig holds settings for peer federation.

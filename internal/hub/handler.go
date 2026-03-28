@@ -291,13 +291,13 @@ func (h *Handler) handleCreateTask(ctx context.Context, req *RPCRequest) *RPCRes
 // optionally stores file attachments.
 func (h *Handler) handleUpdateTask(ctx context.Context, req *RPCRequest) *RPCResponse {
 	var params struct {
-		AgentID     string                 `json:"agent_id"`
-		TaskID      string                 `json:"task_id"`
-		Status      protocol.TaskStatus    `json:"status"`
-		Description string                 `json:"description"`
-		Summary     string                 `json:"summary"`
-		Reason      string                 `json:"reason"`
-		Files       []string               `json:"files"`
+		AgentID     string              `json:"agent_id"`
+		TaskID      string              `json:"task_id"`
+		Status      protocol.TaskStatus `json:"status"`
+		Description string              `json:"description"`
+		Summary     string              `json:"summary"`
+		Reason      string              `json:"reason"`
+		Files       []string            `json:"files"`
 	}
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		return rpcError(req.ID, -32602, "invalid params: "+err.Error())

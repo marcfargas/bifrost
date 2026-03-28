@@ -79,11 +79,11 @@ func registerWhoAmI(server *mcp.Server, agent *protocol.Agent) {
 // registerSend registers the bifrost_send tool.
 func registerSend(server *mcp.Server, mux *hubMux, agent *protocol.Agent) {
 	type sendArgs struct {
-		To       string `json:"to" jsonschema:"recipient address: agent:name, channel:name, or task:id"`
-		Body     string `json:"body" jsonschema:"message body text"`
-		Type     string `json:"type,omitempty" jsonschema:"message type: QUESTION, ANSWER, CONTEXT, STATUS, ERROR (default ANSWER)"`
-		Subject  string `json:"subject,omitempty" jsonschema:"optional message subject line"`
-		Priority string `json:"priority,omitempty" jsonschema:"message priority: low, normal, urgent (default normal)"`
+		To        string `json:"to" jsonschema:"recipient address: agent:name, channel:name, or task:id"`
+		Body      string `json:"body" jsonschema:"message body text"`
+		Type      string `json:"type,omitempty" jsonschema:"message type: QUESTION, ANSWER, CONTEXT, STATUS, ERROR (default ANSWER)"`
+		Subject   string `json:"subject,omitempty" jsonschema:"optional message subject line"`
+		Priority  string `json:"priority,omitempty" jsonschema:"message priority: low, normal, urgent (default normal)"`
 		InReplyTo string `json:"in_reply_to,omitempty" jsonschema:"optional message ID this replies to"`
 	}
 
@@ -221,11 +221,11 @@ func registerCreateTask(server *mcp.Server, mux *hubMux, agent *protocol.Agent) 
 // registerUpdateTask registers the bifrost_update_task tool.
 func registerUpdateTask(server *mcp.Server, mux *hubMux, agent *protocol.Agent) {
 	type updateTaskArgs struct {
-		TaskID      string `json:"task_id" jsonschema:"ID of the task to update"`
-		Status      string `json:"status,omitempty" jsonschema:"new status: accepted, in_progress, completed, failed, rejected"`
-		Description string `json:"description,omitempty" jsonschema:"updated task description"`
-		Summary     string `json:"summary,omitempty" jsonschema:"completion summary"`
-		Reason      string `json:"reason,omitempty" jsonschema:"reason for rejection or failure"`
+		TaskID      string   `json:"task_id" jsonschema:"ID of the task to update"`
+		Status      string   `json:"status,omitempty" jsonschema:"new status: accepted, in_progress, completed, failed, rejected"`
+		Description string   `json:"description,omitempty" jsonschema:"updated task description"`
+		Summary     string   `json:"summary,omitempty" jsonschema:"completion summary"`
+		Reason      string   `json:"reason,omitempty" jsonschema:"reason for rejection or failure"`
 		Files       []string `json:"files,omitempty" jsonschema:"optional list of local file paths to attach"`
 	}
 
@@ -573,8 +573,8 @@ func registerPeer(server *mcp.Server, mux *hubMux) {
 			}
 
 			var result struct {
-				PeerID string             `json:"peer_id"`
-				Agents []protocol.Agent   `json:"agents"`
+				PeerID string           `json:"peer_id"`
+				Agents []protocol.Agent `json:"agents"`
 			}
 			if jsonErr := json.Unmarshal(data, &result); jsonErr != nil {
 				return errorResult("failed to parse response"), nil, nil

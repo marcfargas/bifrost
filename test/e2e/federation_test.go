@@ -123,11 +123,11 @@ func TestFederatedE2E(t *testing.T) {
 	// that points to the local hub's bifrost shim.
 
 	projectA := filepath.Join(dirA, "project-alpha")
-	os.MkdirAll(projectA, 0o755)                                              //nolint:errcheck
+	os.MkdirAll(projectA, 0o755)                                                   //nolint:errcheck
 	os.WriteFile(filepath.Join(projectA, "README.md"), []byte("# Alpha\n"), 0o644) //nolint:errcheck
 
 	projectB := filepath.Join(dirB, "project-beta")
-	os.MkdirAll(projectB, 0o755)                                             //nolint:errcheck
+	os.MkdirAll(projectB, 0o755)                                                  //nolint:errcheck
 	os.WriteFile(filepath.Join(projectB, "README.md"), []byte("# Beta\n"), 0o644) //nolint:errcheck
 
 	mcpA := map[string]any{
