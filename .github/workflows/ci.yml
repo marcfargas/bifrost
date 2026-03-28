@@ -79,6 +79,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
     env:
       ANTHROPIC_AUTH_TOKEN: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
+      ANTHROPIC_BASE_URL: ${{ vars.ANTHROPIC_BASE_URL }}
 
     steps:
       - uses: actions/checkout@v4
