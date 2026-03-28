@@ -56,7 +56,7 @@ type Hub struct {
 }
 
 // NewHub creates a Hub backed by the given store and wires agent registry,
-// message router, and task manager to it.
+// message router, task manager, and sync engine to it.
 func NewHub(s store.Store) *Hub {
 	h := &Hub{store: s}
 	h.agents = newAgentRegistry(s, h)
@@ -65,6 +65,9 @@ func NewHub(s store.Store) *Hub {
 	h.channels = newChannelManager(s, h)
 	h.dnd = newDNDManager(s, h, true)
 	h.conversations = newConversationManager(s, h, 10*time.Minute)
+	// Wire the SyncEngine; callers must call h.Sync().Start(ctx) to begin processing.
+	eng := NewSyncEngine(s, h, nil)
+	h.syncEngine = eng
 	return h
 }
 

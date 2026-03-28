@@ -28,6 +28,8 @@ type TaskUpdate struct {
 }
 
 // TaskManager handles task lifecycle: creation, updates, and retrieval.
+// Tasks are conversations with IsTask=true. There is no separate task table;
+// task state is derived from conversation metadata and the event stream.
 type TaskManager struct {
 	store store.Store
 	hub   *Hub
@@ -47,9 +49,10 @@ func isValidTransition(from, to protocol.TaskStatus) bool {
 }
 
 // CreateTask creates a new task from requester to assignee. It resolves the
-// assignee via the agent registry, creates a dedicated conversation, persists
-// the task, links the conversation, subscribes both parties to "task:<id>",
-// and notifies the assignee.
+// assignee via the agent registry, creates a conversation with IsTask=true,
+// initialises delivery targets, appends a message event via the SyncEngine,
+// and notifies the assignee. Returns a *protocol.Task built from the
+// conversation so that callers (handler.go) see the same shape as before.
 func (m *TaskManager) CreateTask(ctx context.Context, requesterID, assigneeAddr, title, description string) (*protocol.Task, error) {
 	assignee, err := m.hub.Agents().Resolve(ctx, assigneeAddr)
 	if err != nil {
@@ -58,61 +61,53 @@ func (m *TaskManager) CreateTask(ctx context.Context, requesterID, assigneeAddr,
 
 	now := time.Now()
 
-	// Generate IDs up front so conversation and task can reference each other.
-	taskID := uuid.New().String()
+	// The conversation ID doubles as the task ID in the new model.
 	convID := uuid.New().String()[:8]
 
-	// Create the conversation already linked to the task.
 	conv := &protocol.Conversation{
 		ConversationID: convID,
 		Participants:   []string{requesterID, assignee.AgentID},
 		IsTask:         true,
+		Title:          title,
+		Assignee:       assignee.AgentID,
+		Requester:      requesterID,
 		CreatedAt:      now,
 	}
 	if err := m.store.SaveConversation(ctx, conv); err != nil {
 		return nil, fmt.Errorf("tasks: save conversation: %w", err)
 	}
 
-	task := &protocol.Task{
-		TaskID:         taskID,
+	// Initialise delivery state so the SyncEngine delivers to both participants.
+	if err := m.store.InitDeliveryTargets(ctx, conv); err != nil {
+		return nil, fmt.Errorf("tasks: init delivery targets: %w", err)
+	}
+
+	// Append the initial message event with the task description.
+	ev := &protocol.Event{
 		ConversationID: convID,
-		Requester:      requesterID,
-		Assignee:       assignee.AgentID,
-		Title:          title,
-		Description:    description,
-		Status:         protocol.TaskStatusRequested,
-		CreatedAt:      now,
-		UpdatedAt:      now,
-	}
-	if err := m.store.SaveTask(ctx, task); err != nil {
-		return nil, fmt.Errorf("tasks: save task: %w", err)
+		Type:           protocol.EventTypeMessage,
+		FromAgent:      requesterID,
+		Data: protocol.EventData{
+			Body:        "Task requested: " + title + "\n\n" + description,
+			MessageType: protocol.MessageTypeContext,
+			Priority:    protocol.PriorityNormal,
+		},
 	}
 
-	// Subscribe both parties to the task channel.
-	target := "task:" + task.TaskID
-	if err := m.store.Subscribe(ctx, requesterID, target); err != nil {
-		return nil, fmt.Errorf("tasks: subscribe requester: %w", err)
-	}
-	if err := m.store.Subscribe(ctx, assignee.AgentID, target); err != nil {
-		return nil, fmt.Errorf("tasks: subscribe assignee: %w", err)
+	if eng := m.hub.Sync(); eng != nil {
+		if err := eng.AppendEvent(ctx, ev); err != nil {
+			return nil, fmt.Errorf("tasks: append event: %w", err)
+		}
 	}
 
-	// Notify assignee via the message router — this handles local delivery,
-	// federation forwarding, DND queuing, and offline queuing automatically.
-	// Tasks are conversations: the task notification is a message in the
-	// task's conversation, routed like any other message.
-	taskMsg := &protocol.Message{
-		ID:             protocol.NewID(),
-		ConversationID: task.ConversationID,
-		From:           requesterID,
-		To:             "agent:" + assignee.AgentID,
-		Type:           protocol.MessageTypeContext,
-		Body:           "Task requested: " + task.Title + "\n\n" + task.Description,
-		Priority:       protocol.PriorityNormal,
-	}
-	m.hub.Messages().Send(ctx, taskMsg)
+	// Also subscribe both parties to "task:<convID>" for legacy channel routing.
+	target := "task:" + convID
+	_ = m.store.Subscribe(ctx, requesterID, target)
+	_ = m.store.Subscribe(ctx, assignee.AgentID, target)
 
-	// Also push the structured task notification for channel display.
+	// Push the structured task notification to the assignee for channel display.
+	task := convToTask(conv, protocol.TaskStatusRequested, "", "", now, now)
+	task.Description = description
 	m.hub.NotifyAgent(assignee.AgentID, Notification{
 		Type:    "task_requested",
 		Payload: task,
@@ -121,82 +116,95 @@ func (m *TaskManager) CreateTask(ctx context.Context, requesterID, assigneeAddr,
 	return task, nil
 }
 
-// UpdateTask validates the caller, validates any status transition, applies
-// updates, and notifies all task subscribers except the caller.
+// UpdateTask validates the caller, validates any status transition, appends a
+// status event via the SyncEngine, and notifies all task subscribers except
+// the caller. The taskID parameter is the ConversationID in the new model.
 func (m *TaskManager) UpdateTask(ctx context.Context, callerAgentID, taskID string, update TaskUpdate) (*protocol.Task, error) {
-	task, err := m.store.GetTask(ctx, taskID)
+	// Look up the conversation (taskID == conversationID).
+	conv, err := m.store.GetConversation(ctx, taskID)
 	if err != nil {
-		return nil, fmt.Errorf("tasks: get task: %w", err)
+		return nil, fmt.Errorf("tasks: get conversation: %w", err)
 	}
-	if task == nil {
+	if conv == nil || !conv.IsTask {
 		return nil, fmt.Errorf("tasks: task not found: %s", taskID)
 	}
 
-	// Only the assignee or requester may update a task.
-	if callerAgentID != task.Assignee && callerAgentID != task.Requester {
+	// Only assignee or requester may update.
+	if callerAgentID != conv.Assignee && callerAgentID != conv.Requester {
 		return nil, fmt.Errorf("tasks: unauthorized: caller %q is not assignee or requester", callerAgentID)
 	}
 
-	// Validate status transition if a status change is requested.
-	if update.Status != "" && update.Status != task.Status {
-		if !isValidTransition(task.Status, update.Status) {
-			return nil, fmt.Errorf("tasks: invalid transition %s → %s", task.Status, update.Status)
-		}
-		task.Status = update.Status
+	// Derive current status from the latest status event.
+	currentStatus, summary, reason, updatedAt, err := m.latestStatus(ctx, taskID)
+	if err != nil {
+		return nil, err
 	}
 
-	if update.Reason != "" {
-		task.Reason = update.Reason
+	// Validate status transition if a new status is requested.
+	if update.Status != "" && update.Status != currentStatus {
+		if !isValidTransition(currentStatus, update.Status) {
+			return nil, fmt.Errorf("tasks: invalid transition %s → %s", currentStatus, update.Status)
+		}
+	}
+
+	newStatus := currentStatus
+	if update.Status != "" {
+		newStatus = update.Status
 	}
 	if update.Summary != "" {
-		task.Summary = update.Summary
+		summary = update.Summary
 	}
-	if update.Description != "" {
-		if task.Description != "" {
-			task.Description += "\n" + update.Description
-		} else {
-			task.Description = update.Description
+	if update.Reason != "" {
+		reason = update.Reason
+	}
+
+	now := time.Now()
+
+	// Append a status event.
+	ev := &protocol.Event{
+		ConversationID: taskID,
+		Type:           protocol.EventTypeStatus,
+		FromAgent:      callerAgentID,
+		Data: protocol.EventData{
+			NewStatus: newStatus,
+			Summary:   summary,
+			Reason:    reason,
+		},
+	}
+
+	if eng := m.hub.Sync(); eng != nil {
+		if err := eng.AppendEvent(ctx, ev); err != nil {
+			return nil, fmt.Errorf("tasks: append status event: %w", err)
 		}
 	}
 
-	task.UpdatedAt = time.Now()
-
-	if err := m.store.UpdateTask(ctx, task); err != nil {
-		return nil, fmt.Errorf("tasks: update task: %w", err)
+	// If there was a description update, append a message event too.
+	if update.Description != "" {
+		descEv := &protocol.Event{
+			ConversationID: taskID,
+			Type:           protocol.EventTypeMessage,
+			FromAgent:      callerAgentID,
+			Data: protocol.EventData{
+				Body:        update.Description,
+				MessageType: protocol.MessageTypeContext,
+				Priority:    protocol.PriorityNormal,
+			},
+		}
+		if eng := m.hub.Sync(); eng != nil {
+			_ = eng.AppendEvent(ctx, descEv)
+		}
 	}
 
-	// Touch the conversation.
-	if task.ConversationID != "" {
-		_ = m.store.TouchConversation(ctx, task.ConversationID)
-	}
+	task := convToTask(conv, newStatus, summary, reason, conv.CreatedAt, now)
+	_ = updatedAt // consumed above
 
-	// Notify all subscribers except the caller via the message router.
-	// This handles federation, DND, and offline queuing automatically.
+	// Notify all task subscribers (except the caller) via structured notification.
 	subscribers, err := m.store.GetSubscribers(ctx, "task:"+taskID)
 	if err == nil {
-		statusMsg := fmt.Sprintf("Task %s: %s", task.Status, task.Title)
-		if task.Summary != "" {
-			statusMsg += "\n" + task.Summary
-		}
-		if task.Reason != "" {
-			statusMsg += "\nReason: " + task.Reason
-		}
-
 		for _, agentID := range subscribers {
 			if agentID == callerAgentID {
 				continue
 			}
-			// Send as a message — the router handles federation/offline/DND.
-			m.hub.Messages().Send(ctx, &protocol.Message{
-				ID:             protocol.NewID(),
-				ConversationID: task.ConversationID,
-				From:           callerAgentID,
-				To:             "agent:" + agentID,
-				Type:           protocol.MessageTypeStatus,
-				Body:           statusMsg,
-				Priority:       protocol.PriorityNormal,
-			})
-			// Also push the structured notification for channel display.
 			m.hub.NotifyAgent(agentID, Notification{Type: "task_updated", Payload: task})
 		}
 	}
@@ -204,34 +212,114 @@ func (m *TaskManager) UpdateTask(ctx context.Context, callerAgentID, taskID stri
 	return task, nil
 }
 
-// GetTask loads a task along with its attachments list.
+// GetTask derives a *protocol.Task from the conversation and its event stream.
+// The taskID parameter is the ConversationID.
 func (m *TaskManager) GetTask(ctx context.Context, taskID string) (*protocol.Task, error) {
-	task, err := m.store.GetTask(ctx, taskID)
+	conv, err := m.store.GetConversation(ctx, taskID)
 	if err != nil {
-		return nil, fmt.Errorf("tasks: get task: %w", err)
+		return nil, fmt.Errorf("tasks: get conversation: %w", err)
 	}
-	if task == nil {
+	if conv == nil || !conv.IsTask {
 		return nil, nil
 	}
 
-	atts, err := m.store.ListAttachments(ctx, taskID)
+	status, summary, reason, updatedAt, err := m.latestStatus(ctx, taskID)
 	if err != nil {
-		return nil, fmt.Errorf("tasks: list attachments: %w", err)
+		return nil, err
 	}
-	ids := make([]string, 0, len(atts))
-	for _, a := range atts {
-		ids = append(ids, a.AttachmentID)
-	}
-	task.Attachments = ids
 
+	task := convToTask(conv, status, summary, reason, conv.CreatedAt, updatedAt)
 	return task, nil
 }
 
-// ListTasks delegates filtering to the store.
+// ListTasks returns task conversations matching the given filter.
 func (m *TaskManager) ListTasks(ctx context.Context, filter store.TaskFilter) ([]*protocol.Task, error) {
-	tasks, err := m.store.ListTasks(ctx, filter)
+	isTask := true
+	convFilter := store.ConversationFilter{
+		IsTask:    &isTask,
+		Assignee:  filter.Assignee,
+		Requester: filter.Requester,
+	}
+	if filter.ConversationID != "" {
+		// Fetch single conversation by ID.
+		conv, err := m.store.GetConversation(ctx, filter.ConversationID)
+		if err != nil {
+			return nil, fmt.Errorf("tasks: list: %w", err)
+		}
+		if conv == nil || !conv.IsTask {
+			return nil, nil
+		}
+		task, err := m.GetTask(ctx, conv.ConversationID)
+		if err != nil {
+			return nil, err
+		}
+		if task == nil {
+			return nil, nil
+		}
+		return []*protocol.Task{task}, nil
+	}
+
+	convs, err := m.store.ListConversations(ctx, convFilter)
 	if err != nil {
-		return nil, fmt.Errorf("tasks: list: %w", err)
+		return nil, fmt.Errorf("tasks: list conversations: %w", err)
+	}
+
+	tasks := make([]*protocol.Task, 0, len(convs))
+	for _, conv := range convs {
+		task, err := m.GetTask(ctx, conv.ConversationID)
+		if err != nil || task == nil {
+			continue
+		}
+		// Apply status filter if set.
+		if filter.Status != "" && task.Status != filter.Status {
+			continue
+		}
+		tasks = append(tasks, task)
 	}
 	return tasks, nil
+}
+
+// latestStatus derives the current task status from the latest status event.
+// If no status event exists, the task is in "requested" state.
+func (m *TaskManager) latestStatus(ctx context.Context, conversationID string) (
+	status protocol.TaskStatus, summary, reason string, updatedAt time.Time, err error,
+) {
+	ev, err := m.store.LatestStatusEvent(ctx, conversationID)
+	if err != nil {
+		return "", "", "", time.Time{}, fmt.Errorf("tasks: latest status event: %w", err)
+	}
+	if ev == nil {
+		// No status event yet — task is in its initial state.
+		conv, getErr := m.store.GetConversation(ctx, conversationID)
+		if getErr != nil {
+			return "", "", "", time.Time{}, getErr
+		}
+		if conv != nil {
+			return protocol.TaskStatusRequested, "", "", conv.CreatedAt, nil
+		}
+		return protocol.TaskStatusRequested, "", "", time.Now(), nil
+	}
+	return ev.Data.NewStatus, ev.Data.Summary, ev.Data.Reason, ev.Timestamp, nil
+}
+
+// convToTask builds a *protocol.Task from a Conversation and derived state.
+// TaskID is set to ConversationID since there is no separate task table.
+func convToTask(
+	conv *protocol.Conversation,
+	status protocol.TaskStatus,
+	summary, reason string,
+	createdAt, updatedAt time.Time,
+) *protocol.Task {
+	return &protocol.Task{
+		TaskID:         conv.ConversationID, // TaskID == ConversationID in new model
+		ConversationID: conv.ConversationID,
+		Requester:      conv.Requester,
+		Assignee:       conv.Assignee,
+		Title:          conv.Title,
+		Status:         status,
+		Summary:        summary,
+		Reason:         reason,
+		CreatedAt:      createdAt,
+		UpdatedAt:      updatedAt,
+	}
 }

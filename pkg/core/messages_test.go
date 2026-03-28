@@ -2,12 +2,28 @@ package core
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/marcfargas/bifrost/pkg/protocol"
 )
+
+// waitForNotification polls notifier.received(agentID) until a notification
+// of the given type appears or the timeout expires.
+func waitForNotification(notifier *testNotifier, agentID, notifType string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		for _, n := range notifier.received(agentID) {
+			if n.Type == notifType {
+				return true
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
+}
 
 // testNotifier captures all notifications delivered through it.
 type testNotifier struct {
@@ -35,11 +51,15 @@ func (n *testNotifier) received(agentID string) []Notification {
 }
 
 func TestSendMessageDelivered(t *testing.T) {
-	ctx := context.Background()
-	hub := newTestHub(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
+	hub := newTestHub(t)
 	notifier := newTestNotifier()
 	hub.AddNotifier(notifier)
+
+	// Start the SyncEngine so events are delivered asynchronously.
+	hub.Sync().Start(ctx)
 
 	sender := &protocol.Agent{
 		AgentID:     "sender-01",
@@ -76,22 +96,16 @@ func TestSendMessageDelivered(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	// The receiver should have received a message.new notification.
-	notifs := notifier.received("receiver-01")
-	var found bool
-	for _, n := range notifs {
-		if n.Type == "message.new" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("receiver-01 did not receive message.new notification; got %d notifications", len(notifs))
-	}
-
 	// Message should have been assigned an ID.
 	if msg.ID == "" {
 		t.Error("message ID was not filled in by Send")
+	}
+
+	// The receiver should receive an event.new notification via the SyncEngine
+	// (delivery is asynchronous; wait up to 500ms).
+	if !waitForNotification(notifier, "receiver-01", "event.new", 500*time.Millisecond) {
+		t.Errorf("receiver-01 did not receive event.new notification within timeout; got: %v",
+			notifier.received("receiver-01"))
 	}
 }
 
@@ -111,7 +125,8 @@ func TestSendMessageToUnknownAgent(t *testing.T) {
 		t.Fatal("expected error sending to unknown agent, got nil")
 	}
 
-	if _, ok := err.(*AgentNotFoundError); !ok {
+	var notFound *AgentNotFoundError
+	if !errors.As(err, &notFound) {
 		t.Errorf("expected *AgentNotFoundError, got %T: %v", err, err)
 	}
 }

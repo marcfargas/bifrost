@@ -25,8 +25,10 @@ func newMessageRouter(s store.Store, h *Hub) *MessageRouter {
 }
 
 // Send processes and routes a message. It fills in defaults (ID, timestamp,
-// priority), resolves or creates a conversation, persists the message, then
-// routes based on the To field.
+// priority), resolves or creates a conversation, creates an Event of type
+// "message", and appends it via the SyncEngine (which handles delivery to local
+// agents and federation). Falls back to direct notification routing when no
+// SyncEngine is configured (broadcast, channel, and federation paths).
 func (r *MessageRouter) Send(ctx context.Context, msg *protocol.Message) error {
 	// Fill defaults.
 	if msg.ID == "" {
@@ -39,35 +41,61 @@ func (r *MessageRouter) Send(ctx context.Context, msg *protocol.Message) error {
 		msg.Priority = protocol.PriorityNormal
 	}
 
-	// Resolve or create conversation.
+	// Broadcast and channel messages don't go through conversation/event model.
+	switch {
+	case msg.To == "*":
+		r.routeBroadcast(ctx, msg)
+		return nil
+	case strings.HasPrefix(msg.To, "channel:"):
+		return r.routeToChannel(ctx, msg)
+	}
+
+	// Resolve or create conversation. This also validates the recipient exists.
 	conv, err := r.getOrCreateConversation(ctx, msg)
 	if err != nil {
 		return fmt.Errorf("messages: conversation: %w", err)
 	}
 	msg.ConversationID = conv.ConversationID
 
-	// Touch conversation activity.
+	// If the recipient is on a peer hub, route via federation regardless of SyncEngine.
+	agent, resolveErr := r.hub.Agents().Resolve(ctx, msg.To)
+	if resolveErr == nil && agent.PeerHub != "" {
+		fed := r.hub.Federation()
+		if fed == nil {
+			return fmt.Errorf("agent %s is on peer hub %s but federation is not enabled", msg.To, agent.PeerHub)
+		}
+		_, err := fed.ForwardMessage(ctx, agent.PeerHub, msg)
+		return err
+	}
+
+	// Use SyncEngine if available: create an Event and append it.
+	if eng := r.hub.Sync(); eng != nil {
+		ev := &protocol.Event{
+			ConversationID: conv.ConversationID,
+			Type:           protocol.EventTypeMessage,
+			FromAgent:      msg.From,
+			Data: protocol.EventData{
+				Body:        msg.Body,
+				MessageType: msg.Type,
+				Priority:    msg.Priority,
+				InReplyTo:   msg.InReplyTo,
+			},
+		}
+		return eng.AppendEvent(ctx, ev)
+	}
+
+	// Fallback path (no SyncEngine): persist message and route directly.
 	if err := r.store.TouchConversation(ctx, conv.ConversationID); err != nil {
 		return fmt.Errorf("messages: touch conversation: %w", err)
 	}
-
-	// Persist message.
 	if err := r.store.SaveMessage(ctx, msg); err != nil {
 		return fmt.Errorf("messages: save: %w", err)
 	}
 
-	// Route.
-	switch {
-	case strings.HasPrefix(msg.To, "channel:"):
-		return r.routeToChannel(ctx, msg)
-	case strings.HasPrefix(msg.To, "task:"):
+	if strings.HasPrefix(msg.To, "task:") {
 		return r.routeToTaskSubscribers(ctx, msg)
-	case msg.To == "*":
-		r.routeBroadcast(ctx, msg)
-		return nil
-	default:
-		return r.routeToAgent(ctx, msg)
 	}
+	return r.routeToAgent(ctx, msg)
 }
 
 // routeToChannel sends the message to all subscribers of the channel target.
@@ -197,16 +225,31 @@ func (r *MessageRouter) getOrCreateConversation(ctx context.Context, msg *protoc
 		}
 	}
 
+	// Resolve the recipient agent to validate it exists and get the canonical agent ID.
+	// This also catches unknown-agent errors before creating a conversation.
+	agent, err := r.hub.Agents().Resolve(ctx, msg.To)
+	if err != nil {
+		return nil, err
+	}
+
 	// Create a new one with a short ID.
 	now := time.Now()
 	conv := &protocol.Conversation{
 		ConversationID: shortID(),
-		Participants:   []string{msg.From, msg.To},
+		Participants:   []string{msg.From, agent.AgentID},
 		CreatedAt:      now,
 	}
 	if err := r.store.SaveConversation(ctx, conv); err != nil {
 		return nil, err
 	}
+
+	// Initialize delivery targets so the SyncEngine can deliver events.
+	if eng := r.hub.Sync(); eng != nil {
+		if err := r.store.InitDeliveryTargets(ctx, conv); err != nil {
+			return nil, fmt.Errorf("messages: init delivery targets: %w", err)
+		}
+	}
+
 	return conv, nil
 }
 

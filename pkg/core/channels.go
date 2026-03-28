@@ -90,11 +90,11 @@ func (m *ChannelManager) validateTarget(ctx context.Context, target string) erro
 		if id == "" {
 			return fmt.Errorf("channels: invalid target %q: task id must not be empty", target)
 		}
-		task, err := m.store.GetTask(ctx, id)
+		conv, err := m.store.GetConversation(ctx, id)
 		if err != nil {
 			return fmt.Errorf("channels: look up task %q: %w", id, err)
 		}
-		if task == nil {
+		if conv == nil || !conv.IsTask {
 			return fmt.Errorf("channels: invalid target %q: task not found", target)
 		}
 		return nil
