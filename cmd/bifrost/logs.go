@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/marcfargas/bifrost/internal/config"
 	"github.com/spf13/cobra"
@@ -57,21 +58,21 @@ func runLogs(n int, follow bool) error {
 		return nil
 	}
 
-	// Seek to end and stream new content.
-	if _, err := f.Seek(0, io.SeekEnd); err != nil {
-		return fmt.Errorf("seek log: %w", err)
+	// Tail the file: read new lines as they are appended.
+	// bufio.Scanner returns false on EOF, so we poll.
+	reader := bufio.NewReader(f)
+	for {
+		line, err := reader.ReadString('\n')
+		if err == io.EOF {
+			// No new data — wait and retry.
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("follow log: %w", err)
+		}
+		fmt.Print(line)
 	}
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		fmt.Println(scanner.Text())
-	}
-	// scanner.Scan() returns false on EOF or error; if it's an error, report it.
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("follow log: %w", err)
-	}
-
-	return nil
 }
 
 // tailLines returns the last n lines from r by reading all lines into a
