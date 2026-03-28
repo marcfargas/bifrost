@@ -133,12 +133,7 @@ level = "debug"
 		t.Fatalf("write config: %v", err)
 	}
 
-	// Point FilePath() at our temp dir.
-	t.Setenv("APPDATA", tmp)
-	t.Setenv("XDG_CONFIG_HOME", tmp)
-	t.Setenv("HOME", tmp)
-
-	cfg, err := Load()
+	cfg, err := LoadFrom(cfgFile)
 	if err != nil {
 		t.Fatalf("Load() returned error: %v", err)
 	}

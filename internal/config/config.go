@@ -123,10 +123,9 @@ type LoggingConfig struct {
 	File  string `toml:"file"`
 }
 
-// Load reads the config from the platform-appropriate path.
+// LoadFrom reads the config from the given path.
 // If the file does not exist, defaults are returned without error.
-func Load() (Config, error) {
-	path := FilePath()
+func LoadFrom(path string) (Config, error) {
 	cfg := Defaults()
 
 	_, err := os.Stat(path)
@@ -142,6 +141,11 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// Load reads the config from the platform-appropriate path.
+func Load() (Config, error) {
+	return LoadFrom(FilePath())
 }
 
 // FilePath returns the platform-appropriate config file path.

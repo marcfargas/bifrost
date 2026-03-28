@@ -87,7 +87,9 @@ func (t *DirectTransport) Start(ctx context.Context, incoming chan<- PeerConn) e
 		}
 	}
 
+	t.mu.Lock()
 	t.listener = listener
+	t.mu.Unlock()
 
 	// Accept loop
 	t.wg.Go(func() {
@@ -316,6 +318,8 @@ func (t *DirectTransport) Stop() error {
 
 // Addr returns the listener address (for tests and config reporting).
 func (t *DirectTransport) Addr() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	if t.listener != nil {
 		return t.listener.Addr().String()
 	}
