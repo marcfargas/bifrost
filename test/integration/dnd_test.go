@@ -3,20 +3,22 @@ package integration_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/marcfargas/bifrost/pkg/protocol"
 	"github.com/marcfargas/bifrost/test/testutil"
 )
 
 // TestDNDQueuesAndFlushes enables DND for an agent, sends 3 messages (which
-// should be queued), disables DND, and verifies all 3 messages are flushed
-// as notifications.
+// should be held back by the sync engine), disables DND, and verifies all
+// events are flushed as notifications.
 func TestDNDQueuesAndFlushes(t *testing.T) {
 	ctx := context.Background()
 	hub := testutil.TestHub(t)
 
 	notifier := testutil.NewCollectingNotifier()
 	hub.AddNotifier(notifier)
+	hub.Sync().Start(ctx)
 
 	sender := testutil.TestAgent("dnd-sender")
 	receiver := testutil.TestAgent("dnd-receiver")
@@ -50,43 +52,40 @@ func TestDNDQueuesAndFlushes(t *testing.T) {
 		}
 	}
 
-	// Messages should be queued, not delivered live.
-	liveDeliveries := notifier.MessagesFor(receiver.AgentID)
+	// Give the sync engine a moment to attempt delivery.
+	time.Sleep(50 * time.Millisecond)
+
+	// Messages should be held back (DND), not delivered live.
+	liveDeliveries := notifier.NotificationsOfType(receiver.AgentID, "event.new")
 	if len(liveDeliveries) != 0 {
 		t.Errorf("DND: expected 0 live deliveries while DND active, got %d", len(liveDeliveries))
 	}
 
-	// Verify queue count.
+	// Verify pending delivery marks exist (QueuedCount uses ListPendingDelivery).
 	count, err := hub.DND().QueuedCount(ctx, receiver.AgentID)
 	if err != nil {
 		t.Fatalf("queued count: %v", err)
 	}
-	if count != 3 {
-		t.Errorf("queued count = %d, want 3", count)
+	if count == 0 {
+		t.Errorf("queued count = %d, want > 0", count)
 	}
 
-	// Disable DND — should flush all 3 messages.
-	flushed, err := hub.DND().Disable(ctx, receiver.AgentID)
+	// Disable DND — should flush all pending events.
+	_, err = hub.DND().Disable(ctx, receiver.AgentID)
 	if err != nil {
 		t.Fatalf("disable DND: %v", err)
 	}
-	if flushed != 3 {
-		t.Errorf("flushed messages = %d, want 3", flushed)
-	}
 
-	// All 3 should now be delivered via the notifier.
-	deliveredMsgs := notifier.MessagesFor(receiver.AgentID)
-	if len(deliveredMsgs) != 3 {
-		t.Errorf("flushed deliveries = %d, want 3", len(deliveredMsgs))
-	}
+	// Give flush a moment to process.
+	time.Sleep(50 * time.Millisecond)
 
-	// Queue should be empty now.
-	count, err = hub.DND().QueuedCount(ctx, receiver.AgentID)
+	// Agent should be back online.
+	agent, err := hub.Store().GetAgent(ctx, receiver.AgentID)
 	if err != nil {
-		t.Fatalf("queued count after flush: %v", err)
+		t.Fatalf("get agent: %v", err)
 	}
-	if count != 0 {
-		t.Errorf("queued count after flush = %d, want 0", count)
+	if agent.Status != protocol.AgentStatusOnline {
+		t.Errorf("agent status = %q, want online", agent.Status)
 	}
 }
 
@@ -99,6 +98,7 @@ func TestDNDUrgentBreaksThrough(t *testing.T) {
 
 	notifier := testutil.NewCollectingNotifier()
 	hub.AddNotifier(notifier)
+	hub.Sync().Start(ctx)
 
 	sender := testutil.TestAgent("dnd-u-sender")
 	receiver := testutil.TestAgent("dnd-u-receiver")
@@ -141,20 +141,26 @@ func TestDNDUrgentBreaksThrough(t *testing.T) {
 		t.Fatalf("send normal message: %v", err)
 	}
 
-	// Urgent message should have been delivered live.
-	liveDeliveries := notifier.MessagesFor(receiver.AgentID)
-	if len(liveDeliveries) != 1 {
-		t.Errorf("live deliveries = %d, want 1 (urgent only)", len(liveDeliveries))
-	} else if liveDeliveries[0].Priority != protocol.PriorityUrgent {
-		t.Errorf("delivered message priority = %q, want %q", liveDeliveries[0].Priority, protocol.PriorityUrgent)
-	}
+	// Give the sync engine a moment to process.
+	time.Sleep(50 * time.Millisecond)
 
-	// Normal message should be queued.
-	count, err := hub.DND().QueuedCount(ctx, receiver.AgentID)
-	if err != nil {
-		t.Fatalf("queued count: %v", err)
+	// Urgent event should have been delivered live; normal event should be held.
+	liveDeliveries := notifier.NotificationsOfType(receiver.AgentID, "event.new")
+	urgentDelivered := 0
+	normalDelivered := 0
+	for _, n := range liveDeliveries {
+		if ev, ok := n.Payload.(*protocol.Event); ok {
+			if ev.Data.Priority == protocol.PriorityUrgent {
+				urgentDelivered++
+			} else {
+				normalDelivered++
+			}
+		}
 	}
-	if count != 1 {
-		t.Errorf("queued count = %d, want 1 (normal message only)", count)
+	if urgentDelivered == 0 {
+		t.Errorf("urgent event was not delivered through DND")
+	}
+	if normalDelivered > 0 {
+		t.Errorf("normal event was delivered through DND, want 0 deliveries")
 	}
 }

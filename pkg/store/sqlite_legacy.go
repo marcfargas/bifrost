@@ -380,8 +380,12 @@ WHERE id = ?`,
 }
 
 func (s *SQLiteStore) TouchConversation(ctx context.Context, conversationID string) error {
-	// last_activity column no longer exists; this is a no-op shim.
-	return nil
+	// Update created_at to now — used by ListStaleConversations which queries created_at.
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET created_at = ? WHERE id = ?`,
+		fmtTime(time.Now()), conversationID,
+	)
+	return err
 }
 
 // SetLastActivity is a test helper that back-dates the created_at of a conversation.
@@ -395,8 +399,41 @@ func (s *SQLiteStore) SetLastActivity(ctx context.Context, conversationID string
 }
 
 func (s *SQLiteStore) ListStaleConversations(ctx context.Context, before time.Time) ([]*protocol.Conversation, error) {
-	// last_activity column no longer exists; returns empty list.
-	return nil, nil
+	// The conversations table uses created_at as the activity timestamp.
+	// Stale conversations are open ones whose created_at is older than `before`.
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, participants, is_task, title, assignee, requester, created_at, closed, closed_reason
+FROM conversations
+WHERE closed = 0 AND created_at < ?
+ORDER BY created_at ASC`, fmtTime(before))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var convs []*protocol.Conversation
+	for rows.Next() {
+		var c protocol.Conversation
+		var parts string
+		var isTask, closed int
+		var createdAt string
+		if err := rows.Scan(
+			&c.ConversationID, &parts, &isTask, &c.Title, &c.Assignee,
+			&c.Requester, &createdAt, &closed, &c.ClosedReason,
+		); err != nil {
+			return nil, err
+		}
+		if err := fromJSON(parts, &c.Participants); err != nil {
+			return nil, err
+		}
+		c.IsTask = isTask == 1
+		c.Closed = closed == 1
+		if c.CreatedAt, err = parseTime(createdAt); err != nil {
+			return nil, err
+		}
+		convs = append(convs, &c)
+	}
+	return convs, rows.Err()
 }
 
 func (s *SQLiteStore) DeleteConversationsBefore(ctx context.Context, before time.Time) error {

@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/marcfargas/bifrost/pkg/protocol"
 	"github.com/marcfargas/bifrost/test/testutil"
@@ -51,27 +52,34 @@ func TestThreeAgentConversation(t *testing.T) {
 		t.Fatalf("send answer: %v", err)
 	}
 
-	// Frontend must have received the answer.
-	frontendMsgs := notifier.MessagesFor(frontend.AgentID)
-	if len(frontendMsgs) == 0 {
-		t.Fatalf("frontend received 0 messages, want at least 1")
+	// Give the async SyncEngine a moment to deliver.
+	time.Sleep(50 * time.Millisecond)
+
+	// Frontend must have received the answer event.
+	frontendEvents := notifier.NotificationsOfType(frontend.AgentID, "event.new")
+	if len(frontendEvents) == 0 {
+		t.Fatalf("frontend received 0 event.new notifications, want at least 1")
 	}
 	found := false
-	for _, m := range frontendMsgs {
-		if m.Body == answer.Body {
-			found = true
-			break
+	for _, n := range frontendEvents {
+		if ev, ok := n.Payload.(*protocol.Event); ok {
+			if ev.Data.Body == answer.Body {
+				found = true
+				break
+			}
 		}
 	}
 	if !found {
-		t.Errorf("frontend did not receive the answer message")
+		t.Errorf("frontend did not receive the answer event")
 	}
 
-	// Mobile must NOT have received any message from this conversation.
-	mobileMsgs := notifier.MessagesFor(mobile.AgentID)
-	for _, m := range mobileMsgs {
-		if m.Body == question.Body || m.Body == answer.Body {
-			t.Errorf("mobile unexpectedly received a conversation message: %q", m.Body)
+	// Mobile must NOT have received any event from this conversation.
+	mobileEvents := notifier.NotificationsOfType(mobile.AgentID, "event.new")
+	for _, n := range mobileEvents {
+		if ev, ok := n.Payload.(*protocol.Event); ok {
+			if ev.Data.Body == question.Body || ev.Data.Body == answer.Body {
+				t.Errorf("mobile unexpectedly received a conversation event: %q", ev.Data.Body)
+			}
 		}
 	}
 }
@@ -105,6 +113,8 @@ func TestBroadcastMessage(t *testing.T) {
 		t.Fatalf("send broadcast: %v", err)
 	}
 
+	// Broadcasts go through the direct notification path (not SyncEngine),
+	// so check "message.new" notifications.
 	// Beta and Gamma must each have received the broadcast.
 	for _, agentID := range []string{beta.AgentID, gamma.AgentID} {
 		msgs := notifier.MessagesFor(agentID)

@@ -336,8 +336,8 @@ func TestLocalE2E_TwoClientsMessageExchange(t *testing.T) {
 	// Read send response on A (may arrive among notifications).
 	// We don't need to parse the response beyond checking no error.
 
-	// --- Read message.new on B ---
-	notifB := drainUntilType(t, connB, "message.new", 5*time.Second)
+	// --- Read event.new on B (SyncEngine delivers event.new, not message.new) ---
+	notifB := drainUntilType(t, connB, "event.new", 5*time.Second)
 
 	paramsJSON, _ := json.Marshal(notifB.Params)
 	var envelope struct {
@@ -346,20 +346,20 @@ func TestLocalE2E_TwoClientsMessageExchange(t *testing.T) {
 	}
 	json.Unmarshal(paramsJSON, &envelope)
 
-	if envelope.Type != "message.new" {
-		t.Fatalf("expected message.new, got %s", envelope.Type)
+	if envelope.Type != "event.new" {
+		t.Fatalf("expected event.new, got %s", envelope.Type)
 	}
 
-	var received protocol.Message
+	var received protocol.Event
 	if err := json.Unmarshal(envelope.Payload, &received); err != nil {
-		t.Fatalf("unmarshal message: %v", err)
+		t.Fatalf("unmarshal event: %v", err)
 	}
 
-	if received.Body != "Hello from A!" {
-		t.Errorf("body: got %q, want %q", received.Body, "Hello from A!")
+	if received.Data.Body != "Hello from A!" {
+		t.Errorf("body: got %q, want %q", received.Data.Body, "Hello from A!")
 	}
-	if received.From != "e2e-agent-a" {
-		t.Errorf("from: got %q, want %q", received.From, "e2e-agent-a")
+	if received.FromAgent != "e2e-agent-a" {
+		t.Errorf("from: got %q, want %q", received.FromAgent, "e2e-agent-a")
 	}
 
 	t.Log("Two-client message exchange passed")

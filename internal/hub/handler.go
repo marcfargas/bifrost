@@ -92,6 +92,8 @@ func (h *Handler) Handle(ctx context.Context, conn *transport.Conn, req *RPCRequ
 		return h.handlePeerList(ctx, req)
 	case "hub.remove_agent":
 		return h.handleRemoveAgent(ctx, req)
+	case "hub.sync_status":
+		return h.handleSyncStatus(ctx, req)
 	default:
 		return rpcError(req.ID, -32601, "method not found")
 	}
@@ -516,10 +518,11 @@ func (h *Handler) handleDNDStatus(ctx context.Context, req *RPCRequest) *RPCResp
 		return rpcError(req.ID, -32001, "agent not found: "+params.AgentID)
 	}
 
-	queued, err := h.hub.DND().QueuedCount(ctx, params.AgentID)
+	marks, err := h.hub.Store().ListPendingDelivery(ctx, "agent", params.AgentID)
 	if err != nil {
 		return rpcError(req.ID, -32000, "queued count failed: "+err.Error())
 	}
+	queued := len(marks)
 
 	enabled := agent.Status == protocol.AgentStatusDND
 	return &RPCResponse{
@@ -529,6 +532,36 @@ func (h *Handler) handleDNDStatus(ctx context.Context, req *RPCRequest) *RPCResp
 			"enabled": enabled,
 			"reason":  agent.DNDReason,
 			"queued":  queued,
+		},
+	}
+}
+
+// handleSyncStatus returns pending delivery counts per agent and peer target.
+func (h *Handler) handleSyncStatus(ctx context.Context, req *RPCRequest) *RPCResponse {
+	agentMarks, err := h.hub.Store().ListPendingDelivery(ctx, "agent", "")
+	if err != nil {
+		return rpcError(req.ID, -32000, "sync status failed: "+err.Error())
+	}
+	peerMarks, err := h.hub.Store().ListPendingDelivery(ctx, "peer", "")
+	if err != nil {
+		return rpcError(req.ID, -32000, "sync status failed: "+err.Error())
+	}
+
+	agentCounts := make(map[string]int)
+	for _, m := range agentMarks {
+		agentCounts[m.TargetID]++
+	}
+	peerCounts := make(map[string]int)
+	for _, m := range peerMarks {
+		peerCounts[m.TargetID]++
+	}
+
+	return &RPCResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result: map[string]any{
+			"agents": agentCounts,
+			"peers":  peerCounts,
 		},
 	}
 }

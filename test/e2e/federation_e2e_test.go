@@ -267,16 +267,28 @@ func TestFederatedE2E_CrossHubMessage(t *testing.T) {
 	}
 
 	// The message was forwarded via federation. On Hub B, the agent should
-	// receive a notification. Because federation delivery is async and may
-	// involve the NotifyAgent path, we check the message arrived in B's store.
+	// receive a notification. Check the event arrived in B's conversation store.
 	deadline = time.Now().Add(5 * time.Second)
 	var found bool
 	for time.Now().Before(deadline) {
-		msgs, err := fe.srvB.Hub().Store().ListMessages(ctx, store.MessageFilter{To: "fed-agent-b"})
+		open := false
+		convs, err := fe.srvB.Hub().Store().ListConversations(ctx, store.ConversationFilter{
+			Participant: "fed-agent-b",
+			Closed:      &open,
+		})
 		if err == nil {
-			for _, m := range msgs {
-				if m.Body == "Cross-hub hello!" && m.From == "fed-agent-a" {
-					found = true
+			for _, conv := range convs {
+				events, err2 := fe.srvB.Hub().Store().ListEventsSince(ctx, conv.ConversationID, "")
+				if err2 != nil {
+					continue
+				}
+				for _, ev := range events {
+					if ev.Data.Body == "Cross-hub hello!" && ev.FromAgent == "fed-agent-a" {
+						found = true
+						break
+					}
+				}
+				if found {
 					break
 				}
 			}
@@ -394,8 +406,8 @@ func TestFederatedE2E_NotificationDeliveryViaSocket(t *testing.T) {
 		t.Fatalf("send: %v", err)
 	}
 
-	// We should receive the message.new notification.
-	notif := drainUntilType(t, conn, "message.new", 5*time.Second)
+	// We should receive the event.new notification (SyncEngine delivers event.new).
+	notif := drainUntilType(t, conn, "event.new", 5*time.Second)
 
 	paramsJSON, _ := json.Marshal(notif.Params)
 	var envelope struct {
@@ -404,11 +416,11 @@ func TestFederatedE2E_NotificationDeliveryViaSocket(t *testing.T) {
 	}
 	json.Unmarshal(paramsJSON, &envelope)
 
-	var msg protocol.Message
-	json.Unmarshal(envelope.Payload, &msg)
+	var ev protocol.Event
+	json.Unmarshal(envelope.Payload, &ev)
 
-	if msg.Body != "Self-test notification" {
-		t.Errorf("body: got %q, want %q", msg.Body, "Self-test notification")
+	if ev.Data.Body != "Self-test notification" {
+		t.Errorf("body: got %q, want %q", ev.Data.Body, "Self-test notification")
 	}
 
 	t.Log("Notification delivery via socket passed")

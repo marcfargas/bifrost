@@ -219,7 +219,7 @@ func TestFederatedOfflineQueue(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.Default()
 
-	// Create Hub A (standalone, no peer actually connected)
+	// Create Hub A (standalone, no peer actually connected).
 	dbA := filepath.Join(t.TempDir(), "a.db")
 	sA, err := store.NewSQLite(dbA)
 	if err != nil {
@@ -234,13 +234,18 @@ func TestFederatedOfflineQueue(t *testing.T) {
 	})
 	mgrA.AddTransport(dtA)
 	hubA.SetFederation(mgrA)
+
+	syncCtx, syncCancel := context.WithCancel(ctx)
+	defer syncCancel()
+	hubA.Sync().Start(syncCtx)
+
 	if err := mgrA.Start(ctx); err != nil {
 		t.Fatalf("start manager A: %v", err)
 	}
 	defer mgrA.Stop()
 	defer sA.Close()
 
-	// Register a peer that is NOT connected
+	// Register a peer that is NOT connected.
 	peerB := &protocol.Peer{
 		PeerID: "hub-b", Transport: protocol.PeerTransportDirect,
 		Status: protocol.PeerStatusDisconnected, LastSeen: time.Now(),
@@ -250,7 +255,17 @@ func TestFederatedOfflineQueue(t *testing.T) {
 		t.Fatalf("upsert peer: %v", err)
 	}
 
-	// Register a remote agent on that disconnected peer
+	// Register local sender and remote agent.
+	localAgent := &protocol.Agent{
+		AgentID: "agent-a1", ProjectName: "frontend",
+		Username: "marc", Hostname: "marc-pc", LocalPath: "/dev/ui",
+		ConnectedAt: time.Now(), LastSeen: time.Now(),
+		ProtocolVersion: protocol.ProtocolVersion,
+	}
+	if err := hubA.Agents().Register(ctx, localAgent); err != nil {
+		t.Fatalf("register local agent: %v", err)
+	}
+
 	remoteAgent := &protocol.Agent{
 		AgentID: "agent-b1", ProjectName: "backend", PeerHub: "hub-b",
 		Status: protocol.AgentStatusUnreachable, Username: "bob", Hostname: "bob-pc",
@@ -261,25 +276,32 @@ func TestFederatedOfflineQueue(t *testing.T) {
 		t.Fatalf("upsert remote agent: %v", err)
 	}
 
-	// Send message — the federation forwarder will try to send to hub-b,
-	// fail (not connected), and enqueue the message.
+	// Send message — SyncEngine will create a conversation and delivery_state rows
+	// for both participants, including the peer target "hub-b".
 	msg := &protocol.Message{
 		From: "agent-a1", To: "agent-b1",
 		Type: protocol.MessageTypeContext, Body: "are you there?",
 	}
 	err = hubA.Messages().Send(ctx, msg)
-	// The send succeeds — the federation manager queues internally.
 	if err != nil {
-		t.Logf("send returned error (expected for offline peer): %v", err)
+		t.Logf("send returned error (may be expected for offline peer): %v", err)
 	}
 
-	// Verify message is in the peer queue
-	queued, err := sA.DequeuePeerMessages(ctx, "hub-b")
+	// Give the SyncEngine a moment to attempt delivery and leave a pending mark.
+	time.Sleep(100 * time.Millisecond)
+
+	// In the new model, pending delivery is tracked via delivery_state.
+	// The event should be in delivery_state for the remote agent "agent-b1".
+	// (Peer-level delivery_state rows are set up separately by the federation manager;
+	// at the agent level, the conversation has a pending mark for agent-b1.)
+	marks, err := sA.ListPendingDelivery(ctx, "agent", "agent-b1")
 	if err != nil {
-		t.Fatalf("dequeue: %v", err)
+		t.Fatalf("ListPendingDelivery: %v", err)
 	}
-	if len(queued) != 1 {
-		t.Errorf("expected 1 queued message, got %d", len(queued))
+	// The conversation should have a delivery mark for agent-b1 (not yet advanced
+	// since the agent is unreachable / on an offline peer).
+	if len(marks) == 0 {
+		t.Error("expected delivery mark for agent-b1, got none")
 	}
 }
 

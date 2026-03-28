@@ -28,10 +28,15 @@ func NewSQLite(dbPath string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("store: create dirs: %w", err)
 	}
 
+	// Use a single SQLite connection. SQLite allows one writer at a time;
+	// using a single connection serialises all statements through one OS handle
+	// so PRAGMA settings (journal_mode, busy_timeout, foreign_keys) remain in
+	// effect for the lifetime of the pool.
 	db, err := sql.Open(driverName, dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("store: open db: %w", err)
 	}
+	db.SetMaxOpenConns(1)
 
 	// WAL mode + busy timeout
 	pragmas := []string{
@@ -637,6 +642,7 @@ func (s *SQLiteStore) ListPendingDelivery(ctx context.Context, targetType, targe
 
 func (s *SQLiteStore) InitDeliveryTargets(ctx context.Context, conv *protocol.Conversation) error {
 	for _, agentID := range conv.Participants {
+		// Always create an agent-level delivery target.
 		_, err := s.db.ExecContext(ctx, `
 INSERT INTO delivery_state (target_type, target_id, conversation_id, last_event_id)
 VALUES ('agent', ?, ?, '')
@@ -645,6 +651,21 @@ ON CONFLICT DO NOTHING`,
 		)
 		if err != nil {
 			return err
+		}
+
+		// If the agent is remote, also create a peer-level delivery target so the
+		// SyncEngine can forward events to the peer hub.
+		agent, err := s.GetAgent(ctx, agentID)
+		if err == nil && agent != nil && agent.PeerHub != "" {
+			_, err = s.db.ExecContext(ctx, `
+INSERT INTO delivery_state (target_type, target_id, conversation_id, last_event_id)
+VALUES ('peer', ?, ?, '')
+ON CONFLICT DO NOTHING`,
+				agent.PeerHub, conv.ConversationID,
+			)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil

@@ -151,11 +151,15 @@ func (r *MessageRouter) routeToAgent(ctx context.Context, msg *protocol.Message)
 	}
 
 	// DND check: queue unless the DND manager says to deliver.
-	if r.hub.DND() != nil && r.hub.DND().ShouldQueue(agent, msg) {
-		if err := r.store.EnqueueMessage(ctx, agent.AgentID, msg); err != nil {
-			return fmt.Errorf("messages: enqueue (dnd): %w", err)
+	// Build a minimal Event to pass to ShouldQueue (which now takes *protocol.Event).
+	if r.hub.DND() != nil {
+		ev := &protocol.Event{Data: protocol.EventData{Priority: msg.Priority}}
+		if r.hub.DND().ShouldQueue(agent, ev) {
+			if err := r.store.EnqueueMessage(ctx, agent.AgentID, msg); err != nil {
+				return fmt.Errorf("messages: enqueue (dnd): %w", err)
+			}
+			return nil
 		}
-		return nil
 	}
 
 	status := r.hub.NotifyAgent(agent.AgentID, Notification{

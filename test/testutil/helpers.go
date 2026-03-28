@@ -1,6 +1,7 @@
 package testutil
 
 import (
+	"context"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 // TestHub creates a Hub backed by a SQLite database in t's temp directory.
 // The database (and temp directory) are cleaned up automatically when the test ends.
+// The SyncEngine is started automatically and cancelled on test cleanup.
 func TestHub(t *testing.T) *core.Hub {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "bifrost_test.db")
@@ -20,7 +22,12 @@ func TestHub(t *testing.T) *core.Hub {
 		t.Fatalf("testutil.TestHub: open sqlite: %v", err)
 	}
 	hub := core.NewHub(s)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	hub.Sync().Start(ctx)
+
 	t.Cleanup(func() {
+		cancel()
 		if err := hub.Store().Close(); err != nil {
 			t.Logf("testutil.TestHub: close store: %v", err)
 		}

@@ -76,11 +76,16 @@ func NewHubWithConfig(s store.Store, dataDir, maxFileSize string) (*Hub, error) 
 }
 
 // SetFederation sets the federation forwarder for cross-hub routing.
+// If f also implements ConversationSyncer, the SyncEngine is wired to it so
+// peer-hub event delivery works automatically.
 // Safe to call concurrently.
 func (h *Hub) SetFederation(f FederationForwarder) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.federation = f
+	if s, ok := f.(ConversationSyncer); ok {
+		h.syncEngine.SetSyncer(s)
+	}
 }
 
 // Federation returns the federation forwarder (may be nil if federation is

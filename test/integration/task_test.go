@@ -45,13 +45,15 @@ func TestFullTaskLifecycle(t *testing.T) {
 		t.Errorf("assignee task_requested notifications = %d, want 1", len(requested))
 	}
 
-	// Simulate clarification: requester sends a message via the task channel.
+	// Simulate clarification: requester sends a message directly to the assignee
+	// using the conversation ID so it's appended to the task conversation.
 	clarification := &protocol.Message{
-		From:     requester.AgentID,
-		To:       "task:" + task.TaskID,
-		Type:     protocol.MessageTypeQuestion,
-		Body:     "Can you clarify the requirements?",
-		Priority: protocol.PriorityNormal,
+		From:           requester.AgentID,
+		To:             assignee.AgentID,
+		Type:           protocol.MessageTypeQuestion,
+		Body:           "Can you clarify the requirements?",
+		Priority:       protocol.PriorityNormal,
+		ConversationID: task.ConversationID,
 	}
 	if err := hub.Messages().Send(ctx, clarification); err != nil {
 		t.Fatalf("send clarification: %v", err)

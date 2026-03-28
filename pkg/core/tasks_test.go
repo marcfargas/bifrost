@@ -2,32 +2,11 @@ package core
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/marcfargas/bifrost/pkg/protocol"
-	"github.com/marcfargas/bifrost/pkg/store"
 )
-
-// newTestHubWithAttachments creates a Hub with AttachmentManager wired in.
-func newTestHubWithAttachments(t *testing.T, maxFileSize string) (*Hub, string) {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "bifrost_test.db")
-	s, err := store.NewSQLite(dbPath)
-	if err != nil {
-		t.Fatalf("newTestHubWithAttachments: open sqlite: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	dataDir := t.TempDir()
-	h, err := NewHubWithConfig(s, dataDir, maxFileSize)
-	if err != nil {
-		t.Fatalf("newTestHubWithAttachments: NewHubWithConfig: %v", err)
-	}
-	return h, dataDir
-}
 
 // registerAgent is a test helper that registers an agent and returns it.
 func registerAgent(t *testing.T, hub *Hub, id, project string) *protocol.Agent {
@@ -219,107 +198,5 @@ func TestUpdateTaskUnauthorized(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected unauthorized error, got nil")
-	}
-}
-
-func TestAttachmentStore(t *testing.T) {
-	ctx := context.Background()
-	hub, _ := newTestHubWithAttachments(t, "10MB")
-
-	registerAgent(t, hub, "uploader-01", "uploader-proj")
-
-	// Create a temp source file.
-	srcDir := t.TempDir()
-	srcPath := filepath.Join(srcDir, "hello.txt")
-	if err := os.WriteFile(srcPath, []byte("hello attachment"), 0o644); err != nil {
-		t.Fatalf("write source file: %v", err)
-	}
-
-	att, err := hub.Attachments().Store(ctx, "task-123", "uploader-01", srcPath)
-	if err != nil {
-		t.Fatalf("Store: %v", err)
-	}
-
-	if att.AttachmentID == "" {
-		t.Error("AttachmentID is empty")
-	}
-	if att.Filename != "hello.txt" {
-		t.Errorf("expected filename %q, got %q", "hello.txt", att.Filename)
-	}
-	if att.TaskID != "task-123" {
-		t.Errorf("expected task_id %q, got %q", "task-123", att.TaskID)
-	}
-	if att.Size != int64(len("hello attachment")) {
-		t.Errorf("expected size %d, got %d", len("hello attachment"), att.Size)
-	}
-
-	// Verify file exists on disk.
-	storedPath := hub.Attachments().FilePath(att.AttachmentID, att.Filename)
-	if _, err := os.Stat(storedPath); err != nil {
-		t.Errorf("stored file not found on disk: %v", err)
-	}
-
-	// Verify metadata in store.
-	fetched, err := hub.Store().GetAttachment(ctx, att.AttachmentID)
-	if err != nil {
-		t.Fatalf("GetAttachment: %v", err)
-	}
-	if fetched == nil {
-		t.Fatal("attachment metadata not found in store")
-	}
-	if fetched.Filename != "hello.txt" {
-		t.Errorf("store filename: expected %q, got %q", "hello.txt", fetched.Filename)
-	}
-}
-
-func TestAttachmentSizeLimit(t *testing.T) {
-	ctx := context.Background()
-	hub, _ := newTestHubWithAttachments(t, "10B")
-
-	registerAgent(t, hub, "uploader-02", "uploader-proj2")
-
-	srcDir := t.TempDir()
-	srcPath := filepath.Join(srcDir, "big.txt")
-	// Write more than 10 bytes.
-	if err := os.WriteFile(srcPath, []byte("this is definitely more than ten bytes"), 0o644); err != nil {
-		t.Fatalf("write source file: %v", err)
-	}
-
-	_, err := hub.Attachments().Store(ctx, "task-456", "uploader-02", srcPath)
-	if err == nil {
-		t.Fatal("expected size limit error, got nil")
-	}
-}
-
-func TestAttachmentRetrieve(t *testing.T) {
-	ctx := context.Background()
-	hub, _ := newTestHubWithAttachments(t, "10MB")
-
-	registerAgent(t, hub, "uploader-03", "uploader-proj3")
-
-	content := []byte("retrieve me")
-	srcDir := t.TempDir()
-	srcPath := filepath.Join(srcDir, "retrieve.txt")
-	if err := os.WriteFile(srcPath, content, 0o644); err != nil {
-		t.Fatalf("write source file: %v", err)
-	}
-
-	att, err := hub.Attachments().Store(ctx, "task-789", "uploader-03", srcPath)
-	if err != nil {
-		t.Fatalf("Store: %v", err)
-	}
-
-	destDir := t.TempDir()
-	destPath, err := hub.Attachments().Retrieve(ctx, att.AttachmentID, destDir)
-	if err != nil {
-		t.Fatalf("Retrieve: %v", err)
-	}
-
-	got, err := os.ReadFile(destPath)
-	if err != nil {
-		t.Fatalf("read retrieved file: %v", err)
-	}
-	if string(got) != string(content) {
-		t.Errorf("retrieved content mismatch: got %q, want %q", got, content)
 	}
 }

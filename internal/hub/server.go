@@ -138,6 +138,9 @@ func (s *Server) Start(ctx context.Context) error {
 		return err
 	}
 
+	// Start the SyncEngine so events are delivered to connected agents.
+	s.hub.Sync().Start(runCtx)
+
 	// Start housekeeping goroutine.
 	s.wg.Go(func() {
 		runHousekeeping(runCtx, s.cfg, s.hub)
@@ -211,6 +214,9 @@ func (s *Server) Run(ctx context.Context) error {
 		s.removePIDFile()
 		return err
 	}
+
+	// Start the SyncEngine so events are delivered to connected agents.
+	s.hub.Sync().Start(runCtx)
 
 	// Start housekeeping goroutine.
 	s.wg.Go(func() {

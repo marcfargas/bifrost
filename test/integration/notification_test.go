@@ -119,7 +119,7 @@ func TestPingOnConnect(t *testing.T) {
 }
 
 // TestNotificationPipeline tests the full path:
-// hub.Messages().Send → core.NotifyAgent → ConnManager.Notify → socket → JSON-RPC notification
+// hub.Messages().Send → SyncEngine → core.NotifyAgent → ConnManager.Notify → socket → JSON-RPC notification
 func TestNotificationPipeline(t *testing.T) {
 	// 1. Create hub with store.
 	dbPath := filepath.Join(t.TempDir(), "test.db")
@@ -133,7 +133,9 @@ func TestNotificationPipeline(t *testing.T) {
 	cm := hub.NewConnManager()
 	h.AddNotifier(cm)
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.Sync().Start(ctx)
 
 	// 2. Create a socket pair to simulate shim↔hub connection.
 	serverConn, clientConn := net.Pipe()
@@ -183,21 +185,21 @@ func TestNotificationPipeline(t *testing.T) {
 	var raw json.RawMessage
 	done := make(chan error, 1)
 	go func() {
-		// There may be agent_joined notifications first — drain until we get message.new
+		// There may be agent_joined notifications first — drain until we get event.new
+		// (SyncEngine now sends event.new instead of message.new).
 		for {
 			var r json.RawMessage
 			if err := clientTransport.Receive(&r); err != nil {
 				done <- err
 				return
 			}
-			// Check if this is a message.new notification
 			var peek struct {
 				Params struct {
 					Type string `json:"type"`
 				} `json:"params"`
 			}
 			json.Unmarshal(r, &peek)
-			if peek.Params.Type == "message.new" {
+			if peek.Params.Type == "event.new" {
 				raw = r
 				done <- nil
 				return
@@ -206,7 +208,7 @@ func TestNotificationPipeline(t *testing.T) {
 		}
 	}()
 
-	// Give the reader goroutine a moment to start
+	// Give the reader goroutine a moment to start.
 	time.Sleep(10 * time.Millisecond)
 
 	// 6. Send a message from A to B.
@@ -227,7 +229,7 @@ func TestNotificationPipeline(t *testing.T) {
 			t.Fatalf("receive on client side failed: %v", err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("timeout: no message.new notification received on client side within 3s")
+		t.Fatal("timeout: no event.new notification received on client side within 3s")
 	}
 
 	t.Logf("Raw notification received: %s", string(raw))
@@ -263,17 +265,17 @@ func TestNotificationPipeline(t *testing.T) {
 		t.Fatal("envelope type is empty — the notification structure doesn't match {type, payload}")
 	}
 
-	// 9. Parse the payload as a Message.
-	var received protocol.Message
+	// 9. Parse the payload as an Event (SyncEngine sends *protocol.Event).
+	var received protocol.Event
 	if err := json.Unmarshal(envelope.Payload, &received); err != nil {
-		t.Fatalf("unmarshal message payload: %v", err)
+		t.Fatalf("unmarshal event payload: %v", err)
 	}
 
-	if received.Body != "Can you hear me?" {
-		t.Errorf("expected 'Can you hear me?', got %q", received.Body)
+	if received.Data.Body != "Can you hear me?" {
+		t.Errorf("expected 'Can you hear me?', got %q", received.Data.Body)
 	}
-	if received.From != "agent-a" {
-		t.Errorf("expected from agent-a, got %s", received.From)
+	if received.FromAgent != "agent-a" {
+		t.Errorf("expected from agent-a, got %s", received.FromAgent)
 	}
 
 	t.Log("Full notification pipeline works!")

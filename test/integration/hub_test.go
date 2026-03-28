@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/marcfargas/bifrost/pkg/core"
 	"github.com/marcfargas/bifrost/pkg/protocol"
@@ -51,7 +52,7 @@ func TestAgentRegistrationAndDiscovery(t *testing.T) {
 }
 
 // TestMessageExchange registers two agents, sends a QUESTION from frontend to
-// backend by alias, and verifies the message is delivered to backend with the
+// backend by alias, and verifies the event is delivered to backend with the
 // correct body and a non-empty conversation ID.
 func TestMessageExchange(t *testing.T) {
 	ctx := context.Background()
@@ -81,18 +82,24 @@ func TestMessageExchange(t *testing.T) {
 		t.Fatalf("send message: %v", err)
 	}
 
-	// Backend should have received the message.
-	msgs := notifier.MessagesFor(backend.AgentID)
-	if len(msgs) == 0 {
-		t.Fatalf("backend received 0 messages, want 1")
+	// Give the async SyncEngine a moment to deliver.
+	time.Sleep(50 * time.Millisecond)
+
+	// Backend should have received an event.new notification.
+	events := notifier.NotificationsOfType(backend.AgentID, "event.new")
+	if len(events) == 0 {
+		t.Fatalf("backend received 0 event.new notifications, want 1")
 	}
 
-	delivered := msgs[0]
-	if delivered.Body != msg.Body {
-		t.Errorf("message body = %q, want %q", delivered.Body, msg.Body)
+	ev, ok := events[0].Payload.(*protocol.Event)
+	if !ok {
+		t.Fatalf("payload is not *protocol.Event")
 	}
-	if delivered.ConversationID == "" {
-		t.Errorf("message ConversationID is empty, want non-empty")
+	if ev.Data.Body != msg.Body {
+		t.Errorf("event body = %q, want %q", ev.Data.Body, msg.Body)
+	}
+	if ev.ConversationID == "" {
+		t.Errorf("event ConversationID is empty, want non-empty")
 	}
 }
 
