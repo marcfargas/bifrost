@@ -65,7 +65,10 @@ func (r *AgentRegistry) Register(ctx context.Context, agent *protocol.Agent) err
 
 	// Broadcast status to federated peers (for agent sync, not notifications).
 	if fed := r.hub.Federation(); fed != nil {
-		fed.BroadcastAgentStatus(ctx, agent.AgentID, protocol.AgentStatusOnline)
+		// TODO: agent status broadcast will be replaced by conversation sync.
+		// Disabled to reduce noise. Agent sync on peer connect handles discovery.
+		_ = fed
+		// fed.BroadcastAgentStatus(ctx, agent.AgentID, protocol.AgentStatusOnline)
 	}
 
 	// Flush any queued messages.
@@ -93,7 +96,10 @@ func (r *AgentRegistry) Deregister(ctx context.Context, agentID string) error {
 
 	// Broadcast status to federated peers.
 	if fed := r.hub.Federation(); fed != nil {
-		fed.BroadcastAgentStatus(ctx, agentID, protocol.AgentStatusOffline)
+		// TODO: agent status broadcast will be replaced by conversation sync.
+		// Disabled to reduce noise. Agent sync on peer connect handles discovery.
+		_ = fed
+		// fed.BroadcastAgentStatus(ctx, agentID, protocol.AgentStatusOffline)
 	}
 
 	return nil
