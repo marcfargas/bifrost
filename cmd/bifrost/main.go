@@ -22,6 +22,9 @@ func main() {
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(newPeerCmd())
 	rootCmd.AddCommand(newLogsCmd())
+	rootCmd.AddCommand(queueCmd)
+	rootCmd.AddCommand(tasksCmd)
+	rootCmd.AddCommand(conversationsCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

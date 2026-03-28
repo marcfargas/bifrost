@@ -7,6 +7,13 @@ import (
 	"github.com/marcfargas/bifrost/pkg/protocol"
 )
 
+// QueueEntry holds per-target queue statistics returned by QueueStats/PeerQueueStats.
+type QueueEntry struct {
+	Target string    `json:"target"`
+	Count  int       `json:"count"`
+	Oldest time.Time `json:"oldest"`
+}
+
 // AgentFilter contains optional filters for listing agents.
 type AgentFilter struct {
 	Status  protocol.AgentStatus // zero value means no filter
@@ -190,6 +197,12 @@ type Store interface {
 	// DequeuePeerMessages atomically retrieves and deletes all queued envelopes for
 	// the given peer hub, returning them in enqueue order.
 	DequeuePeerMessages(ctx context.Context, peerID string) ([]*protocol.PeerEnvelope, error)
+
+	// QueueStats returns per-agent message queue counts with oldest enqueue time.
+	QueueStats(ctx context.Context) ([]QueueEntry, error)
+
+	// PeerQueueStats returns per-peer message queue counts with oldest enqueue time.
+	PeerQueueStats(ctx context.Context) ([]QueueEntry, error)
 
 	// --- Lifecycle ---
 

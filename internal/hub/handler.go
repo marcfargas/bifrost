@@ -96,6 +96,8 @@ func (h *Handler) Handle(ctx context.Context, conn *transport.Conn, req *RPCRequ
 		return h.handlePeerList(ctx, req)
 	case "hub.remove_agent":
 		return h.handleRemoveAgent(ctx, req)
+	case "hub.queue_status":
+		return h.handleQueueStatus(ctx, req)
 	default:
 		return rpcError(req.ID, -32601, "method not found")
 	}
@@ -605,6 +607,26 @@ func (h *Handler) handleDNDStatus(ctx context.Context, req *RPCRequest) *RPCResp
 			"enabled": enabled,
 			"reason":  agent.DNDReason,
 			"queued":  queued,
+		},
+	}
+}
+
+// handleQueueStatus returns per-agent and per-peer message queue statistics.
+func (h *Handler) handleQueueStatus(ctx context.Context, req *RPCRequest) *RPCResponse {
+	agentEntries, err := h.hub.Store().QueueStats(ctx)
+	if err != nil {
+		return rpcError(req.ID, -32000, "queue stats failed: "+err.Error())
+	}
+	peerEntries, err := h.hub.Store().PeerQueueStats(ctx)
+	if err != nil {
+		return rpcError(req.ID, -32000, "peer queue stats failed: "+err.Error())
+	}
+	return &RPCResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result: map[string]any{
+			"agents": agentEntries,
+			"peers":  peerEntries,
 		},
 	}
 }

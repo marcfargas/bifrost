@@ -1008,6 +1008,49 @@ func (s *SQLiteStore) QueuedMessageCount(ctx context.Context, recipientAgentID s
 	return count, err
 }
 
+func (s *SQLiteStore) QueueStats(ctx context.Context) ([]QueueEntry, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT agent_id, COUNT(*) AS cnt, MIN(enqueued_at) AS oldest
+FROM message_queue
+GROUP BY agent_id
+ORDER BY agent_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanQueueEntries(rows)
+}
+
+func (s *SQLiteStore) PeerQueueStats(ctx context.Context) ([]QueueEntry, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT peer_id, COUNT(*) AS cnt, MIN(enqueued_at) AS oldest
+FROM peer_message_queue
+GROUP BY peer_id
+ORDER BY peer_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanQueueEntries(rows)
+}
+
+func scanQueueEntries(rows *sql.Rows) ([]QueueEntry, error) {
+	var entries []QueueEntry
+	for rows.Next() {
+		var e QueueEntry
+		var oldest string
+		if err := rows.Scan(&e.Target, &e.Count, &oldest); err != nil {
+			return nil, err
+		}
+		var err error
+		if e.Oldest, err = parseTime(oldest); err != nil {
+			return nil, err
+		}
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
+}
+
 // ---- Peers ------------------------------------------------------------------
 
 func (s *SQLiteStore) UpsertPeer(ctx context.Context, peer *protocol.Peer) error {
