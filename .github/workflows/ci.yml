@@ -96,6 +96,14 @@ jobs:
         if: env.ANTHROPIC_AUTH_TOKEN != ''
         run: npm install -g @anthropic-ai/claude-code
 
-      - name: Run Claude E2E tests
+      - name: "E2E: MCP mode — bifrost_whoami"
         if: env.ANTHROPIC_AUTH_TOKEN != ''
-        run: go test -tags e2e ./test/e2e/ -v -timeout 120s -run TestClaude
+        run: go test -tags e2e ./test/e2e/ -v -timeout 120s -run TestClaudeMCP_WhoAmI
+
+      - name: "E2E: MCP mode — bifrost_list_agents"
+        if: env.ANTHROPIC_AUTH_TOKEN != ''
+        run: go test -tags e2e ./test/e2e/ -v -timeout 120s -run TestClaudeMCP_ListAgents
+
+      - name: "E2E: Plugin mode — bifrost_whoami"
+        if: env.ANTHROPIC_AUTH_TOKEN != ''
+        run: go test -tags e2e ./test/e2e/ -v -timeout 120s -run TestClaudePlugin_WhoAmI
