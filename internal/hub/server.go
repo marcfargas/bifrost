@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"os"
@@ -12,23 +13,26 @@ import (
 	"syscall"
 
 	"github.com/marcfargas/bifrost/internal/config"
+	"github.com/marcfargas/bifrost/internal/federation"
 	"github.com/marcfargas/bifrost/internal/transport"
 	"github.com/marcfargas/bifrost/pkg/core"
+	"github.com/marcfargas/bifrost/pkg/protocol"
 	"github.com/marcfargas/bifrost/pkg/store"
 )
 
 // Server is the hub daemon. It owns the listener, connection manager, and
 // core Hub, and drives the RPC accept loop.
 type Server struct {
-	cfg      *config.Config
-	hub      *core.Hub
-	connMgr  *ConnManager
-	listener transport.Listener
-	handler  *Handler
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	logger   *slog.Logger
-	mcpHTTP  *transport.MCPHTTPTransport // nil if MCP HTTP is disabled
+	cfg        *config.Config
+	hub        *core.Hub
+	connMgr    *ConnManager
+	listener   transport.Listener
+	handler    *Handler
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
+	logger     *slog.Logger
+	mcpHTTP    *transport.MCPHTTPTransport // nil if MCP HTTP is disabled
+	fedManager *federation.Manager         // nil if federation is disabled
 }
 
 // NewServer creates a Server: opens the SQLite store, creates the core Hub,
@@ -100,6 +104,14 @@ func (s *Server) Start(ctx context.Context) error {
 		return err
 	}
 
+	// Start federation manager if any transport is enabled.
+	if err := s.startFederation(runCtx); err != nil {
+		s.stopMCPHTTP()
+		_ = ln.Close()
+		cancel()
+		return err
+	}
+
 	// Start housekeeping goroutine.
 	s.wg.Go(func() {
 		runHousekeeping(runCtx, s.cfg, s.hub)
@@ -119,6 +131,7 @@ func (s *Server) Stop() {
 		s.cancel()
 	}
 	s.stopMCPHTTP()
+	s.stopFederation()
 	if s.listener != nil {
 		_ = s.listener.Close()
 	}
@@ -162,6 +175,14 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 
+	// Start federation manager if any transport is enabled.
+	if err := s.startFederation(runCtx); err != nil {
+		s.stopMCPHTTP()
+		_ = ln.Close()
+		s.removePIDFile()
+		return err
+	}
+
 	// Start housekeeping goroutine.
 	s.wg.Go(func() {
 		runHousekeeping(runCtx, s.cfg, s.hub)
@@ -185,12 +206,144 @@ func (s *Server) Run(ctx context.Context) error {
 	// Clean shutdown.
 	cancel()
 	s.stopMCPHTTP()
+	s.stopFederation()
 	_ = s.listener.Close()
 	s.wg.Wait()
 	_ = s.hub.Store().Close()
 	s.removePIDFile()
 
 	return nil
+}
+
+// startFederation creates and starts the federation manager if any transport is
+// enabled in the config. It wires the manager to both the core Hub (for message
+// forwarding) and the RPC handler (for peer.* RPCs).
+// If federation has already been set on the hub (e.g. by a test or external
+// caller before Start), this method is a no-op to avoid overwriting that setup.
+func (s *Server) startFederation(ctx context.Context) error {
+	// If federation was wired externally (e.g. tests), don't overwrite it.
+	if s.hub.Federation() != nil {
+		s.logger.Debug("federation already configured externally, skipping auto-setup")
+		return nil
+	}
+
+	fedCfg := s.cfg.Federation
+	if !fedCfg.Libp2p.Enabled && !fedCfg.MDNS.Enabled && !fedCfg.Direct.Enabled {
+		s.logger.Info("federation disabled (no transports enabled)")
+		return nil
+	}
+
+	// Determine the local peer ID and create enabled transports.
+	var localPeerID string
+	var libp2pTransport *federation.Libp2pTransport
+
+	if fedCfg.Libp2p.Enabled {
+		lt, err := federation.NewLibp2pTransport(federation.Libp2pConfig{
+			Logger: s.logger,
+		})
+		if err != nil {
+			return fmt.Errorf("federation: create libp2p transport: %w", err)
+		}
+		libp2pTransport = lt
+		localPeerID = lt.HostID()
+	} else {
+		// Derive a stable peer ID from hostname + data dir without libp2p.
+		hostname, _ := os.Hostname()
+		dataDir := s.cfg.Storage.DataDir
+		if dataDir == "" {
+			dataDir = config.DataDir()
+		}
+		sum := sha256.Sum256([]byte(hostname + dataDir))
+		localPeerID = fmt.Sprintf("%x", sum[:8])
+	}
+
+	mgr := federation.NewManager(s.hub, s.hub.Store(), s.cfg, localPeerID, s.logger)
+
+	if libp2pTransport != nil {
+		mgr.AddTransport(libp2pTransport)
+	}
+
+	if fedCfg.MDNS.Enabled {
+		mgr.AddTransport(federation.NewMDNSTransport(federation.MDNSTransportConfig{
+			HubID:  localPeerID,
+			Logger: s.logger,
+		}))
+	}
+
+	if fedCfg.Direct.Enabled {
+		mgr.AddTransport(federation.NewDirectTransport(federation.DirectTransportConfig{
+			HubID:  localPeerID,
+			Listen: fedCfg.Direct.Listen,
+			Logger: s.logger,
+		}))
+	}
+
+	if err := mgr.Start(ctx); err != nil {
+		return fmt.Errorf("federation: start manager: %w", err)
+	}
+
+	s.fedManager = mgr
+	s.hub.SetFederation(mgr)
+	s.handler.SetPeerManager(&federationPeerAdapter{
+		mgr:     mgr,
+		libp2pt: libp2pTransport,
+		store:   s.hub.Store(),
+	})
+
+	s.logger.Info("federation started", "peer_id", localPeerID,
+		"libp2p", fedCfg.Libp2p.Enabled,
+		"mdns", fedCfg.MDNS.Enabled,
+		"direct", fedCfg.Direct.Enabled)
+
+	return nil
+}
+
+// stopFederation gracefully stops the federation manager if it was started.
+func (s *Server) stopFederation() {
+	if s.fedManager != nil {
+		if err := s.fedManager.Stop(); err != nil {
+			s.logger.Error("federation manager stop error", "err", err)
+		}
+	}
+}
+
+// federationPeerAdapter adapts *federation.Manager to the PeerManager interface
+// required by the hub RPC handler. It delegates peer.new / peer.join to the
+// libp2p transport (when available) and list operations to the store.
+type federationPeerAdapter struct {
+	mgr     *federation.Manager
+	libp2pt *federation.Libp2pTransport // nil when libp2p is not enabled
+	store   store.Store
+}
+
+// PeerNew generates a magic code and announces this hub on the DHT via libp2p.
+func (a *federationPeerAdapter) PeerNew(ctx context.Context) (string, error) {
+	if a.libp2pt == nil {
+		return "", fmt.Errorf("libp2p transport is not enabled")
+	}
+	return a.libp2pt.PeerNew(ctx)
+}
+
+// PeerJoin connects to a peer hub identified by a magic code.
+func (a *federationPeerAdapter) PeerJoin(ctx context.Context, code string) (string, error) {
+	if a.libp2pt == nil {
+		return "", fmt.Errorf("libp2p transport is not enabled")
+	}
+	conn, err := a.libp2pt.PeerJoin(ctx, code)
+	if err != nil {
+		return "", err
+	}
+	return a.mgr.ConnectViaPeerConn(ctx, conn, protocol.PeerTransport("libp2p"))
+}
+
+// ListPeers returns all known federation peers from the store.
+func (a *federationPeerAdapter) ListPeers(ctx context.Context) ([]*protocol.Peer, error) {
+	return a.store.ListPeers(ctx)
+}
+
+// ListRemoteAgents returns agents registered on a specific peer hub.
+func (a *federationPeerAdapter) ListRemoteAgents(ctx context.Context, peerHub string) ([]*protocol.Agent, error) {
+	return a.store.ListAgents(ctx, store.AgentFilter{PeerHub: peerHub})
 }
 
 // startMCPHTTP starts the MCP HTTP transport when cfg.Hub.MCP.Enabled is true.

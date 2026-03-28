@@ -270,6 +270,60 @@ func (m *Manager) ConnectPeer(ctx context.Context, transport PeerTransport, addr
 	return peerID, nil
 }
 
+// ConnectViaPeerConn performs the federation handshake over an already-dialed
+// PeerConn and registers it with the manager. Use this when the caller has
+// already opened the connection (e.g. after a libp2p magic-code join).
+func (m *Manager) ConnectViaPeerConn(ctx context.Context, conn PeerConn, transport PeerTransport) (string, error) {
+	peerID := conn.PeerID()
+
+	// Send handshake heartbeat
+	hbPayload, _ := json.Marshal(protocol.PeerHeartbeatPayload{Timestamp: time.Now()})
+	handshake := &protocol.PeerEnvelope{
+		Method:  "peer.heartbeat",
+		ID:      protocol.NewShortID(),
+		Version: protocol.ProtocolVersion,
+		From:    m.localPeerID,
+		Payload: hbPayload,
+	}
+	if err := conn.Send(ctx, handshake); err != nil {
+		conn.Close()
+		return "", fmt.Errorf("handshake send: %w", err)
+	}
+
+	// Wait for handshake response
+	resp, err := conn.Receive(ctx)
+	if err != nil {
+		conn.Close()
+		return "", fmt.Errorf("handshake receive: %w", err)
+	}
+
+	if err := protocol.CheckPeerVersion(resp.Version); err != nil {
+		conn.Close()
+		return "", err
+	}
+
+	// Register peer
+	now := time.Now()
+	peer := &protocol.Peer{
+		PeerID:       peerID,
+		Transport:    transport,
+		Status:       protocol.PeerStatusConnected,
+		LastSeen:     now,
+		ConnectedAt:  now,
+		ProtoVersion: resp.Version,
+	}
+	m.store.UpsertPeer(ctx, peer)
+	m.addPeerConn(ctx, peerID, conn, peer)
+
+	// Initial agent sync
+	m.syncAgentsWithPeer(ctx, peerID)
+
+	// Flush queued messages
+	m.flushPeerQueue(ctx, peerID)
+
+	return peerID, nil
+}
+
 // addPeerConn registers a peer connection and starts its read/write loops.
 func (m *Manager) addPeerConn(ctx context.Context, peerID string, conn PeerConn, peer *protocol.Peer) {
 	ps := &peerState{
