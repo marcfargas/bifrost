@@ -207,6 +207,10 @@ func DataDir() string {
 //   - Linux:    $XDG_RUNTIME_DIR/bifrost/hub.sock (fallback /tmp/bifrost-$UID/)
 //   - macOS:    $TMPDIR/bifrost/hub.sock
 func SocketPath() string {
+	// Allow explicit override for testing.
+	if p := os.Getenv("BIFROST_SOCKET_PATH"); p != "" {
+		return p
+	}
 	switch runtime.GOOS {
 	case "windows":
 		return filepath.Join(os.Getenv("LOCALAPPDATA"), "bifrost", "hub.sock")

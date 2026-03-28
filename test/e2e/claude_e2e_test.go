@@ -31,8 +31,8 @@ import (
 // output contains an agent ID. This proves the full MCP pipeline: claude
 // spawns the shim, the shim connects to the hub, registers, and serves tools.
 func TestClaudeWhoAmI(t *testing.T) {
-	if os.Getenv("ANTHROPIC_API_KEY") == "" {
-		t.Skip("ANTHROPIC_API_KEY not set")
+	if os.Getenv("ANTHROPIC_API_KEY") == "" && os.Getenv("ANTHROPIC_AUTH_TOKEN") == "" {
+		t.Skip("ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN not set")
 	}
 	if _, err := exec.LookPath("claude"); err != nil {
 		t.Skip("claude CLI not on PATH")
@@ -49,7 +49,7 @@ func TestClaudeWhoAmI(t *testing.T) {
 	t.Cleanup(func() { os.RemoveAll(socketDir) })
 
 	// The shim resolves the socket via config.SocketPath(), which on Linux
-	// uses $XDG_RUNTIME_DIR/bifrost/hub.sock. We point both the hub and
+	// uses $BIFROST_SOCKET_PATH/bifrost/hub.sock. We point both the hub and
 	// the shim (via env) at the same path.
 	bifrostDir := filepath.Join(socketDir, "bifrost")
 	if err := os.MkdirAll(bifrostDir, 0o755); err != nil {
@@ -112,9 +112,9 @@ func TestClaudeWhoAmI(t *testing.T) {
 	)
 	cmd.Dir = projectDir
 
-	// Set XDG_RUNTIME_DIR so the shim's config.SocketPath() resolves to our
+	// Set BIFROST_SOCKET_PATH so the shim's config.SocketPath() resolves to our
 	// test socket. Also pass through ANTHROPIC_API_KEY.
-	cmd.Env = buildEnv(socketDir)
+	cmd.Env = buildEnv(socketPath)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -148,8 +148,8 @@ func TestClaudeWhoAmI(t *testing.T) {
 // protocol, then asks claude -p to call bifrost_list_agents and verifies the
 // fake agent appears in the output.
 func TestClaudeListAgents(t *testing.T) {
-	if os.Getenv("ANTHROPIC_API_KEY") == "" {
-		t.Skip("ANTHROPIC_API_KEY not set")
+	if os.Getenv("ANTHROPIC_API_KEY") == "" && os.Getenv("ANTHROPIC_AUTH_TOKEN") == "" {
+		t.Skip("ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN not set")
 	}
 	if _, err := exec.LookPath("claude"); err != nil {
 		t.Skip("claude CLI not on PATH")
@@ -228,7 +228,7 @@ func TestClaudeListAgents(t *testing.T) {
 		"--max-turns", "3",
 	)
 	cmd.Dir = projectDir
-	cmd.Env = buildEnv(socketDir)
+	cmd.Env = buildEnv(socketPath)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -323,24 +323,34 @@ func fakeAgent(id string) protocol.Agent {
 }
 
 // buildEnv constructs the environment for the claude subprocess.
-// It passes through the current environment but overrides XDG_RUNTIME_DIR
+// It passes through the current environment but overrides BIFROST_SOCKET_PATH
 // so the bifrost shim connects to our test hub's socket.
-func buildEnv(runtimeDir string) []string {
+func buildEnv(socketPath string) []string {
 	env := os.Environ()
 
-	// Filter out existing XDG_RUNTIME_DIR, HOME (we keep HOME), and
+	// Filter out existing BIFROST_SOCKET_PATH, HOME (we keep HOME), and
 	// BIFROST_* vars that might interfere.
 	filtered := make([]string, 0, len(env)+3)
 	for _, e := range env {
 		key := strings.SplitN(e, "=", 2)[0]
 		switch strings.ToUpper(key) {
-		case "XDG_RUNTIME_DIR":
+		case "BIFROST_SOCKET_PATH":
 			continue // we'll set our own
 		default:
 			filtered = append(filtered, e)
 		}
 	}
 
-	filtered = append(filtered, "XDG_RUNTIME_DIR="+runtimeDir)
+	filtered = append(filtered, "BIFROST_SOCKET_PATH="+socketPath)
+
+	// If using ANTHROPIC_AUTH_TOKEN (litellm proxy), map it to ANTHROPIC_API_KEY
+	// so claude CLI picks it up. Also pass through ANTHROPIC_BASE_URL.
+	if os.Getenv("ANTHROPIC_API_KEY") == "" && os.Getenv("ANTHROPIC_AUTH_TOKEN") != "" {
+		filtered = append(filtered, "ANTHROPIC_API_KEY="+os.Getenv("ANTHROPIC_AUTH_TOKEN"))
+	}
+	if url := os.Getenv("ANTHROPIC_BASE_URL"); url != "" {
+		filtered = append(filtered, "ANTHROPIC_BASE_URL="+url)
+	}
+
 	return filtered
 }
