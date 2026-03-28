@@ -2,7 +2,6 @@ package store_test
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 	"time"
 
@@ -112,56 +111,5 @@ func TestPeerCRUD(t *testing.T) {
 	}
 	if got != nil {
 		t.Error("expected nil after delete")
-	}
-}
-
-func TestPeerMessageQueue(t *testing.T) {
-	ctx := context.Background()
-	s := newTestStore(t)
-
-	makeEnv := func(id, method string) *protocol.PeerEnvelope {
-		payload, _ := json.Marshal(map[string]string{"msg": id})
-		return &protocol.PeerEnvelope{
-			Method:  method,
-			ID:      id,
-			Version: "1.0.0",
-			From:    "hub-a",
-			Payload: payload,
-		}
-	}
-
-	env1 := makeEnv("env-001", "message")
-	env2 := makeEnv("env-002", "message")
-
-	// Enqueue two messages
-	if err := s.EnqueuePeerMessage(ctx, "peer-hub-001", env1); err != nil {
-		t.Fatalf("EnqueuePeerMessage 1: %v", err)
-	}
-	if err := s.EnqueuePeerMessage(ctx, "peer-hub-001", env2); err != nil {
-		t.Fatalf("EnqueuePeerMessage 2: %v", err)
-	}
-
-	// Dequeue — should return both in order
-	envs, err := s.DequeuePeerMessages(ctx, "peer-hub-001")
-	if err != nil {
-		t.Fatalf("DequeuePeerMessages: %v", err)
-	}
-	if len(envs) != 2 {
-		t.Fatalf("expected 2 envelopes, got %d", len(envs))
-	}
-	if envs[0].ID != "env-001" {
-		t.Errorf("first dequeued ID: want env-001 got %q", envs[0].ID)
-	}
-	if envs[1].ID != "env-002" {
-		t.Errorf("second dequeued ID: want env-002 got %q", envs[1].ID)
-	}
-
-	// Dequeue again — should be empty
-	envs, err = s.DequeuePeerMessages(ctx, "peer-hub-001")
-	if err != nil {
-		t.Fatalf("DequeuePeerMessages second call: %v", err)
-	}
-	if len(envs) != 0 {
-		t.Errorf("expected 0 after dequeue, got %d", len(envs))
 	}
 }

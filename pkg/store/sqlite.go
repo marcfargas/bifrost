@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -56,6 +55,23 @@ func NewSQLite(dbPath string) (*SQLiteStore, error) {
 }
 
 func (s *SQLiteStore) migrate() error {
+	// Phase 1: drop old tables that are replaced by the new schema.
+	// v0.1.x has no production data requiring preservation.
+	oldTables := []string{"messages", "tasks", "message_queue", "peer_message_queue", "attachments"}
+	for _, tbl := range oldTables {
+		var name string
+		err := s.db.QueryRow(
+			`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, tbl,
+		).Scan(&name)
+		if err == nil {
+			// Table exists — drop it.
+			if _, err := s.db.Exec(`DROP TABLE IF EXISTS ` + tbl); err != nil {
+				return fmt.Errorf("drop old table %s: %w", tbl, err)
+			}
+		}
+	}
+
+	// Phase 2: create current schema.
 	_, err := s.db.Exec(`
 CREATE TABLE IF NOT EXISTS agents (
     agent_id         TEXT PRIMARY KEY,
@@ -74,64 +90,41 @@ CREATE TABLE IF NOT EXISTS agents (
     peer_hub         TEXT NOT NULL DEFAULT ''
 );
 
-CREATE TABLE IF NOT EXISTS messages (
-    id              TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL DEFAULT '',
-    from_agent      TEXT NOT NULL DEFAULT '',
-    to_agent        TEXT NOT NULL DEFAULT '',
-    type            TEXT NOT NULL DEFAULT '',
-    subject         TEXT NOT NULL DEFAULT '',
-    body            TEXT NOT NULL DEFAULT '',
-    in_reply_to     TEXT NOT NULL DEFAULT '',
-    priority        TEXT NOT NULL DEFAULT 'normal',
-    timestamp       TEXT NOT NULL,
-    acknowledged    INTEGER NOT NULL DEFAULT 0,
-    no_reply        INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
-CREATE INDEX IF NOT EXISTS idx_messages_to           ON messages(to_agent);
-CREATE INDEX IF NOT EXISTS idx_messages_timestamp    ON messages(timestamp);
-
 CREATE TABLE IF NOT EXISTS conversations (
-    conversation_id TEXT PRIMARY KEY,
-    participants    TEXT NOT NULL DEFAULT '[]',
-    task_id         TEXT NOT NULL DEFAULT '',
-    created_at      TEXT NOT NULL,
-    last_activity   TEXT NOT NULL,
-    closed          INTEGER NOT NULL DEFAULT 0,
-    closed_reason   TEXT NOT NULL DEFAULT ''
+    id            TEXT PRIMARY KEY,
+    participants  TEXT NOT NULL DEFAULT '[]',
+    is_task       INTEGER NOT NULL DEFAULT 0,
+    title         TEXT NOT NULL DEFAULT '',
+    assignee      TEXT NOT NULL DEFAULT '',
+    requester     TEXT NOT NULL DEFAULT '',
+    created_at    TEXT NOT NULL,
+    closed        INTEGER NOT NULL DEFAULT 0,
+    closed_reason TEXT NOT NULL DEFAULT ''
 );
-CREATE INDEX IF NOT EXISTS idx_conversations_closed         ON conversations(closed);
-CREATE INDEX IF NOT EXISTS idx_conversations_last_activity  ON conversations(last_activity);
+CREATE INDEX IF NOT EXISTS idx_conversations_closed    ON conversations(closed);
+CREATE INDEX IF NOT EXISTS idx_conversations_is_task   ON conversations(is_task);
+CREATE INDEX IF NOT EXISTS idx_conversations_assignee  ON conversations(assignee);
+CREATE INDEX IF NOT EXISTS idx_conversations_requester ON conversations(requester);
 
-CREATE TABLE IF NOT EXISTS tasks (
-    task_id         TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL DEFAULT '',
-    requester       TEXT NOT NULL DEFAULT '',
-    assignee        TEXT NOT NULL DEFAULT '',
-    title           TEXT NOT NULL DEFAULT '',
-    description     TEXT NOT NULL DEFAULT '',
-    status          TEXT NOT NULL DEFAULT 'requested',
-    reason          TEXT NOT NULL DEFAULT '',
-    summary         TEXT NOT NULL DEFAULT '',
-    attachments     TEXT NOT NULL DEFAULT '[]',
-    created_at      TEXT NOT NULL,
-    updated_at      TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS events (
+    id              TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    type            TEXT NOT NULL,
+    from_agent      TEXT NOT NULL,
+    data            TEXT NOT NULL,
+    timestamp       TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_tasks_conversation ON tasks(conversation_id);
-CREATE INDEX IF NOT EXISTS idx_tasks_status       ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_events_conversation ON events(conversation_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_events_type         ON events(conversation_id, type);
 
-CREATE TABLE IF NOT EXISTS attachments (
-    attachment_id TEXT PRIMARY KEY,
-    task_id       TEXT NOT NULL DEFAULT '',
-    filename      TEXT NOT NULL DEFAULT '',
-    content_type  TEXT NOT NULL DEFAULT '',
-    size          INTEGER NOT NULL DEFAULT 0,
-    uploaded_by   TEXT NOT NULL DEFAULT '',
-    uploaded_at   TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS delivery_state (
+    target_type     TEXT NOT NULL,
+    target_id       TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    last_event_id   TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (target_type, target_id, conversation_id)
 );
-CREATE INDEX IF NOT EXISTS idx_attachments_task       ON attachments(task_id);
-CREATE INDEX IF NOT EXISTS idx_attachments_uploaded_at ON attachments(uploaded_at);
+CREATE INDEX IF NOT EXISTS idx_delivery_target ON delivery_state(target_type, target_id);
 
 CREATE TABLE IF NOT EXISTS subscriptions (
     agent_id TEXT NOT NULL,
@@ -139,15 +132,6 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     PRIMARY KEY (agent_id, target)
 );
 CREATE INDEX IF NOT EXISTS idx_subscriptions_target ON subscriptions(target);
-
-CREATE TABLE IF NOT EXISTS message_queue (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    agent_id   TEXT NOT NULL,
-    message_id TEXT NOT NULL,
-    payload    TEXT NOT NULL,
-    enqueued_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_message_queue_agent ON message_queue(agent_id, id);
 
 CREATE TABLE IF NOT EXISTS peers (
     peer_id         TEXT PRIMARY KEY,
@@ -161,14 +145,6 @@ CREATE TABLE IF NOT EXISTS peers (
     fail_count      INTEGER NOT NULL DEFAULT 0,
     proto_version   TEXT NOT NULL DEFAULT ''
 );
-
-CREATE TABLE IF NOT EXISTS peer_message_queue (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    peer_id     TEXT NOT NULL,
-    payload     TEXT NOT NULL,
-    enqueued_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_peer_message_queue_peer ON peer_message_queue(peer_id, id);
 `)
 	return err
 }
@@ -210,6 +186,13 @@ func parseTime(s string) (time.Time, error) {
 		t, err = time.Parse(time.RFC3339, s)
 	}
 	return t, err
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // ---- Agents -----------------------------------------------------------------
@@ -365,119 +348,6 @@ func scanAgents(rows *sql.Rows) ([]*protocol.Agent, error) {
 	return agents, rows.Err()
 }
 
-// ---- Messages ---------------------------------------------------------------
-
-func (s *SQLiteStore) SaveMessage(ctx context.Context, msg *protocol.Message) error {
-	_, err := s.db.ExecContext(ctx, `
-INSERT INTO messages
-    (id, conversation_id, from_agent, to_agent, type, subject, body,
-     in_reply_to, priority, timestamp, acknowledged, no_reply)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		msg.ID, msg.ConversationID, msg.From, msg.To, string(msg.Type),
-		msg.Subject, msg.Body, msg.InReplyTo, string(msg.Priority),
-		fmtTime(msg.Timestamp), boolInt(msg.Acknowledged), boolInt(msg.NoReply),
-	)
-	return err
-}
-
-func (s *SQLiteStore) GetMessage(ctx context.Context, messageID string) (*protocol.Message, error) {
-	row := s.db.QueryRowContext(ctx, `
-SELECT id, conversation_id, from_agent, to_agent, type, subject, body,
-       in_reply_to, priority, timestamp, acknowledged, no_reply
-FROM messages WHERE id = ?`, messageID)
-	return scanMessage(row)
-}
-
-func (s *SQLiteStore) ListMessages(ctx context.Context, filter MessageFilter) ([]*protocol.Message, error) {
-	q := `
-SELECT id, conversation_id, from_agent, to_agent, type, subject, body,
-       in_reply_to, priority, timestamp, acknowledged, no_reply
-FROM messages WHERE 1=1`
-	args := []any{}
-	if filter.ConversationID != "" {
-		q += " AND conversation_id = ?"
-		args = append(args, filter.ConversationID)
-	}
-	if filter.To != "" {
-		q += " AND to_agent = ?"
-		args = append(args, filter.To)
-	}
-	if filter.From != "" {
-		q += " AND from_agent = ?"
-		args = append(args, filter.From)
-	}
-	if filter.Unread {
-		q += " AND acknowledged = 0"
-	}
-	q += " ORDER BY timestamp ASC"
-
-	rows, err := s.db.QueryContext(ctx, q, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanMessages(rows)
-}
-
-func (s *SQLiteStore) AckMessage(ctx context.Context, messageID string) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE messages SET acknowledged = 1 WHERE id = ?`, messageID)
-	return err
-}
-
-func (s *SQLiteStore) DeleteMessagesBefore(ctx context.Context, before time.Time) error {
-	_, err := s.db.ExecContext(ctx,
-		`DELETE FROM messages WHERE timestamp < ?`, fmtTime(before))
-	return err
-}
-
-func scanMessage(row *sql.Row) (*protocol.Message, error) {
-	var m protocol.Message
-	var ts string
-	var acked, noReply int
-	err := row.Scan(
-		&m.ID, &m.ConversationID, &m.From, &m.To, &m.Type,
-		&m.Subject, &m.Body, &m.InReplyTo, &m.Priority,
-		&ts, &acked, &noReply,
-	)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	m.Acknowledged = acked == 1
-	m.NoReply = noReply == 1
-	if m.Timestamp, err = parseTime(ts); err != nil {
-		return nil, err
-	}
-	return &m, nil
-}
-
-func scanMessages(rows *sql.Rows) ([]*protocol.Message, error) {
-	var msgs []*protocol.Message
-	for rows.Next() {
-		var m protocol.Message
-		var ts string
-		var acked, noReply int
-		if err := rows.Scan(
-			&m.ID, &m.ConversationID, &m.From, &m.To, &m.Type,
-			&m.Subject, &m.Body, &m.InReplyTo, &m.Priority,
-			&ts, &acked, &noReply,
-		); err != nil {
-			return nil, err
-		}
-		m.Acknowledged = acked == 1
-		m.NoReply = noReply == 1
-		var err error
-		if m.Timestamp, err = parseTime(ts); err != nil {
-			return nil, err
-		}
-		msgs = append(msgs, &m)
-	}
-	return msgs, rows.Err()
-}
-
 // ---- Conversations ----------------------------------------------------------
 
 func (s *SQLiteStore) SaveConversation(ctx context.Context, conv *protocol.Conversation) error {
@@ -485,416 +355,287 @@ func (s *SQLiteStore) SaveConversation(ctx context.Context, conv *protocol.Conve
 	if err != nil {
 		return err
 	}
-	taskID := ""
+	isTask := 0
 	if conv.IsTask {
-		taskID = conv.ConversationID // sentinel: IsTask conversations store their own ID
+		isTask = 1
 	}
 	_, err = s.db.ExecContext(ctx, `
-INSERT INTO conversations
-    (conversation_id, participants, task_id, created_at, last_activity, closed, closed_reason)
-VALUES (?,?,?,?,?,?,?)`,
-		conv.ConversationID, parts, taskID,
-		fmtTime(conv.CreatedAt), fmtTime(time.Now()),
-		boolInt(conv.Closed), string(conv.ClosedReason),
+INSERT INTO conversations (id, participants, is_task, title, assignee, requester, created_at, closed, closed_reason)
+VALUES (?, ?, ?, ?, ?, ?, ?, 0, '')`,
+		conv.ConversationID, parts, isTask,
+		conv.Title, conv.Assignee, conv.Requester,
+		fmtTime(conv.CreatedAt),
 	)
 	return err
 }
 
 func (s *SQLiteStore) GetConversation(ctx context.Context, conversationID string) (*protocol.Conversation, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT conversation_id, participants, task_id, created_at, last_activity, closed, closed_reason
-FROM conversations WHERE conversation_id = ?`, conversationID)
+SELECT id, participants, is_task, title, assignee, requester, created_at, closed, closed_reason
+FROM conversations WHERE id = ?`, conversationID)
 	return scanConversation(row)
 }
 
 func (s *SQLiteStore) ListConversations(ctx context.Context, filter ConversationFilter) ([]*protocol.Conversation, error) {
-	q := `
-SELECT conversation_id, participants, task_id, created_at, last_activity, closed, closed_reason
+	q := `SELECT id, participants, is_task, title, assignee, requester, created_at, closed, closed_reason
 FROM conversations WHERE 1=1`
-	args := []any{}
-	if filter.TaskID != "" {
-		q += " AND task_id = ?"
-		args = append(args, filter.TaskID)
-	}
+	var args []any
 	if filter.Closed != nil {
-		q += " AND closed = ?"
-		args = append(args, boolInt(*filter.Closed))
+		closed := 0
+		if *filter.Closed {
+			closed = 1
+		}
+		q += ` AND closed = ?`
+		args = append(args, closed)
 	}
-	// participant filter handled post-scan (JSON array)
-	q += " ORDER BY last_activity DESC"
+	if filter.IsTask != nil {
+		isTask := 0
+		if *filter.IsTask {
+			isTask = 1
+		}
+		q += ` AND is_task = ?`
+		args = append(args, isTask)
+	}
+	if filter.Assignee != "" {
+		q += ` AND assignee = ?`
+		args = append(args, filter.Assignee)
+	}
+	if filter.Requester != "" {
+		q += ` AND requester = ?`
+		args = append(args, filter.Requester)
+	}
+	if filter.Participant != "" {
+		q += ` AND participants LIKE ?`
+		args = append(args, "%"+filter.Participant+"%")
+	}
+	q += ` ORDER BY created_at DESC`
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	convs, err := scanConversations(rows)
-	if err != nil {
-		return nil, err
-	}
-	if filter.Participant == "" {
-		return convs, nil
-	}
-	// filter by participant in-memory
-	var result []*protocol.Conversation
-	for _, c := range convs {
-		if slices.Contains(c.Participants, filter.Participant) {
-			result = append(result, c)
-		}
-	}
-	return result, nil
-}
-
-func (s *SQLiteStore) UpdateConversation(ctx context.Context, conv *protocol.Conversation) error {
-	parts, err := toJSON(conv.Participants)
-	if err != nil {
-		return err
-	}
-	taskID := ""
-	if conv.IsTask {
-		taskID = conv.ConversationID
-	}
-	_, err = s.db.ExecContext(ctx, `
-UPDATE conversations
-SET participants = ?, task_id = ?, last_activity = ?, closed = ?, closed_reason = ?
-WHERE conversation_id = ?`,
-		parts, taskID,
-		fmtTime(time.Now()),
-		boolInt(conv.Closed), string(conv.ClosedReason),
-		conv.ConversationID,
-	)
-	return err
-}
-
-func (s *SQLiteStore) CloseConversation(ctx context.Context, conversationID string, reason protocol.ConversationCloseReason) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET closed = 1, closed_reason = ? WHERE conversation_id = ?`,
-		string(reason), conversationID)
-	return err
-}
-
-func (s *SQLiteStore) TouchConversation(ctx context.Context, conversationID string) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET last_activity = ? WHERE conversation_id = ?`,
-		fmtTime(time.Now()), conversationID)
-	return err
-}
-
-// SetLastActivity sets the last_activity column for a conversation to an arbitrary
-// time. This is intentionally not on the Store interface — it is only used by
-// tests that need to back-date activity to trigger CloseStale.
-func (s *SQLiteStore) SetLastActivity(ctx context.Context, conversationID string, t time.Time) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET last_activity = ? WHERE conversation_id = ?`,
-		fmtTime(t), conversationID)
-	return err
-}
-
-func (s *SQLiteStore) ListStaleConversations(ctx context.Context, before time.Time) ([]*protocol.Conversation, error) {
-	rows, err := s.db.QueryContext(ctx, `
-SELECT conversation_id, participants, task_id, created_at, last_activity, closed, closed_reason
-FROM conversations
-WHERE closed = 0 AND last_activity < ?
-ORDER BY last_activity ASC`, fmtTime(before))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanConversations(rows)
-}
-
-func (s *SQLiteStore) DeleteConversationsBefore(ctx context.Context, before time.Time) error {
-	_, err := s.db.ExecContext(ctx,
-		`DELETE FROM conversations WHERE closed = 1 AND created_at < ?`, fmtTime(before))
-	return err
-}
-
-func scanConversation(row *sql.Row) (*protocol.Conversation, error) {
-	var c protocol.Conversation
-	var partsRaw, createdAt, lastActivity, taskID string
-	var closed int
-	err := row.Scan(
-		&c.ConversationID, &partsRaw, &taskID,
-		&createdAt, &lastActivity, &closed, &c.ClosedReason,
-	)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	c.IsTask = taskID != ""
-	c.Closed = closed == 1
-	if err := fromJSON(partsRaw, &c.Participants); err != nil {
-		return nil, err
-	}
-	if c.CreatedAt, err = parseTime(createdAt); err != nil {
-		return nil, err
-	}
-	// lastActivity is no longer part of the struct; discard after parsing.
-	if _, err = parseTime(lastActivity); err != nil {
-		return nil, err
-	}
-	return &c, nil
-}
-
-func scanConversations(rows *sql.Rows) ([]*protocol.Conversation, error) {
 	var convs []*protocol.Conversation
 	for rows.Next() {
-		var c protocol.Conversation
-		var partsRaw, createdAt, lastActivity, taskID string
-		var closed int
-		if err := rows.Scan(
-			&c.ConversationID, &partsRaw, &taskID,
-			&createdAt, &lastActivity, &closed, &c.ClosedReason,
-		); err != nil {
+		conv, err := scanConversation(rows)
+		if err != nil {
 			return nil, err
 		}
-		c.IsTask = taskID != ""
-		c.Closed = closed == 1
-		if err := fromJSON(partsRaw, &c.Participants); err != nil {
-			return nil, err
-		}
-		var err error
-		if c.CreatedAt, err = parseTime(createdAt); err != nil {
-			return nil, err
-		}
-		// lastActivity is no longer part of the struct; discard after parsing.
-		if _, err = parseTime(lastActivity); err != nil {
-			return nil, err
-		}
-		convs = append(convs, &c)
+		convs = append(convs, conv)
 	}
 	return convs, rows.Err()
 }
 
-// ---- Tasks ------------------------------------------------------------------
-
-func (s *SQLiteStore) SaveTask(ctx context.Context, task *protocol.Task) error {
-	atts, err := toJSON(task.Attachments)
-	if err != nil {
-		return err
-	}
-	_, err = s.db.ExecContext(ctx, `
-INSERT INTO tasks
-    (task_id, conversation_id, requester, assignee, title, description,
-     status, reason, summary, attachments, created_at, updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		task.TaskID, task.ConversationID, task.Requester, task.Assignee,
-		task.Title, task.Description, string(task.Status), task.Reason,
-		task.Summary, atts, fmtTime(task.CreatedAt), fmtTime(task.UpdatedAt),
+func (s *SQLiteStore) CloseConversation(ctx context.Context, conversationID string, reason protocol.ConversationCloseReason) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET closed = 1, closed_reason = ? WHERE id = ?`,
+		string(reason), conversationID,
 	)
 	return err
 }
 
-func (s *SQLiteStore) GetTask(ctx context.Context, taskID string) (*protocol.Task, error) {
-	row := s.db.QueryRowContext(ctx, `
-SELECT task_id, conversation_id, requester, assignee, title, description,
-       status, reason, summary, attachments, created_at, updated_at
-FROM tasks WHERE task_id = ?`, taskID)
-	return scanTask(row)
+// scanConversationRow is a shared interface satisfied by both *sql.Row and *sql.Rows.
+type scanConversationRow interface {
+	Scan(...any) error
 }
 
-func (s *SQLiteStore) UpdateTask(ctx context.Context, task *protocol.Task) error {
-	atts, err := toJSON(task.Attachments)
-	if err != nil {
-		return err
-	}
-	_, err = s.db.ExecContext(ctx, `
-UPDATE tasks SET
-    conversation_id = ?, requester = ?, assignee = ?, title = ?, description = ?,
-    status = ?, reason = ?, summary = ?, attachments = ?, created_at = ?, updated_at = ?
-WHERE task_id = ?`,
-		task.ConversationID, task.Requester, task.Assignee, task.Title, task.Description,
-		string(task.Status), task.Reason, task.Summary, atts,
-		fmtTime(task.CreatedAt), fmtTime(task.UpdatedAt), task.TaskID,
+func scanConversation(row scanConversationRow) (*protocol.Conversation, error) {
+	var (
+		id, partsJSON, title, assignee, requester, createdAtStr, closedReason string
+		isTask, closed                                                        int
 	)
-	return err
-}
-
-func (s *SQLiteStore) ListTasks(ctx context.Context, filter TaskFilter) ([]*protocol.Task, error) {
-	q := `
-SELECT task_id, conversation_id, requester, assignee, title, description,
-       status, reason, summary, attachments, created_at, updated_at
-FROM tasks WHERE 1=1`
-	args := []any{}
-	if filter.ConversationID != "" {
-		q += " AND conversation_id = ?"
-		args = append(args, filter.ConversationID)
-	}
-	if filter.Requester != "" {
-		q += " AND requester = ?"
-		args = append(args, filter.Requester)
-	}
-	if filter.Assignee != "" {
-		q += " AND assignee = ?"
-		args = append(args, filter.Assignee)
-	}
-	if filter.Status != "" {
-		q += " AND status = ?"
-		args = append(args, string(filter.Status))
-	}
-	q += " ORDER BY created_at ASC"
-
-	rows, err := s.db.QueryContext(ctx, q, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanTasks(rows)
-}
-
-func (s *SQLiteStore) DeleteCompletedTasksBefore(ctx context.Context, before time.Time) error {
-	_, err := s.db.ExecContext(ctx, `
-DELETE FROM tasks
-WHERE status IN ('completed','failed','rejected') AND updated_at < ?`,
-		fmtTime(before))
-	return err
-}
-
-func scanTask(row *sql.Row) (*protocol.Task, error) {
-	var t protocol.Task
-	var attsRaw, createdAt, updatedAt string
-	err := row.Scan(
-		&t.TaskID, &t.ConversationID, &t.Requester, &t.Assignee, &t.Title, &t.Description,
-		&t.Status, &t.Reason, &t.Summary, &attsRaw, &createdAt, &updatedAt,
-	)
+	err := row.Scan(&id, &partsJSON, &isTask, &title, &assignee, &requester,
+		&createdAtStr, &closed, &closedReason)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if err := fromJSON(attsRaw, &t.Attachments); err != nil {
-		return nil, err
-	}
-	if t.CreatedAt, err = parseTime(createdAt); err != nil {
-		return nil, err
-	}
-	if t.UpdatedAt, err = parseTime(updatedAt); err != nil {
-		return nil, err
-	}
-	return &t, nil
+	createdAt, _ := parseTime(createdAtStr)
+	var parts []string
+	_ = fromJSON(partsJSON, &parts)
+	return &protocol.Conversation{
+		ConversationID: id,
+		Participants:   parts,
+		IsTask:         isTask == 1,
+		Title:          title,
+		Assignee:       assignee,
+		Requester:      requester,
+		CreatedAt:      createdAt,
+		Closed:         closed == 1,
+		ClosedReason:   protocol.ConversationCloseReason(closedReason),
+	}, nil
 }
 
-func scanTasks(rows *sql.Rows) ([]*protocol.Task, error) {
-	var tasks []*protocol.Task
-	for rows.Next() {
-		var t protocol.Task
-		var attsRaw, createdAt, updatedAt string
-		if err := rows.Scan(
-			&t.TaskID, &t.ConversationID, &t.Requester, &t.Assignee, &t.Title, &t.Description,
-			&t.Status, &t.Reason, &t.Summary, &attsRaw, &createdAt, &updatedAt,
-		); err != nil {
-			return nil, err
-		}
-		if err := fromJSON(attsRaw, &t.Attachments); err != nil {
-			return nil, err
-		}
-		var err error
-		if t.CreatedAt, err = parseTime(createdAt); err != nil {
-			return nil, err
-		}
-		if t.UpdatedAt, err = parseTime(updatedAt); err != nil {
-			return nil, err
-		}
-		tasks = append(tasks, &t)
+// ---- Events -----------------------------------------------------------------
+
+func (s *SQLiteStore) AppendEvent(ctx context.Context, ev *protocol.Event) error {
+	data, err := json.Marshal(ev.Data)
+	if err != nil {
+		return err
 	}
-	return tasks, rows.Err()
-}
-
-// ---- Attachments ------------------------------------------------------------
-
-func (s *SQLiteStore) SaveAttachment(ctx context.Context, att *protocol.Attachment) error {
-	_, err := s.db.ExecContext(ctx, `
-INSERT INTO attachments
-    (attachment_id, task_id, filename, content_type, size, uploaded_by, uploaded_at)
-VALUES (?,?,?,?,?,?,?)`,
-		att.AttachmentID, att.TaskID, att.Filename, att.ContentType,
-		att.Size, att.UploadedBy, fmtTime(att.UploadedAt),
+	_, err = s.db.ExecContext(ctx, `
+INSERT INTO events (id, conversation_id, type, from_agent, data, timestamp)
+VALUES (?, ?, ?, ?, ?, ?)`,
+		ev.ID, ev.ConversationID, string(ev.Type), ev.FromAgent,
+		string(data), fmtTime(ev.Timestamp),
 	)
 	return err
 }
 
-func (s *SQLiteStore) GetAttachment(ctx context.Context, attachmentID string) (*protocol.Attachment, error) {
-	row := s.db.QueryRowContext(ctx, `
-SELECT attachment_id, task_id, filename, content_type, size, uploaded_by, uploaded_at
-FROM attachments WHERE attachment_id = ?`, attachmentID)
+func (s *SQLiteStore) GetEvent(ctx context.Context, eventID string) (*protocol.Event, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, conversation_id, type, from_agent, data, timestamp FROM events WHERE id = ?`,
+		eventID)
+	return scanEvent(row)
+}
 
-	var a protocol.Attachment
-	var uploadedAt string
-	err := row.Scan(
-		&a.AttachmentID, &a.TaskID, &a.Filename, &a.ContentType,
-		&a.Size, &a.UploadedBy, &uploadedAt,
+func (s *SQLiteStore) ListEventsSince(ctx context.Context, conversationID, afterEventID string) ([]*protocol.Event, error) {
+	var (
+		rows *sql.Rows
+		err  error
 	)
+	if afterEventID == "" {
+		rows, err = s.db.QueryContext(ctx,
+			`SELECT id, conversation_id, type, from_agent, data, timestamp
+             FROM events WHERE conversation_id = ? ORDER BY timestamp ASC`,
+			conversationID)
+	} else {
+		// Find the timestamp of the last-seen event, then return everything after it.
+		var afterTS string
+		qErr := s.db.QueryRowContext(ctx,
+			`SELECT timestamp FROM events WHERE id = ?`, afterEventID,
+		).Scan(&afterTS)
+		if qErr == sql.ErrNoRows {
+			// afterEventID unknown — return all events.
+			rows, err = s.db.QueryContext(ctx,
+				`SELECT id, conversation_id, type, from_agent, data, timestamp
+                 FROM events WHERE conversation_id = ? ORDER BY timestamp ASC`,
+				conversationID)
+		} else if qErr != nil {
+			return nil, qErr
+		} else {
+			rows, err = s.db.QueryContext(ctx,
+				`SELECT id, conversation_id, type, from_agent, data, timestamp
+                 FROM events
+                 WHERE conversation_id = ? AND (timestamp > ? OR (timestamp = ? AND id > ?))
+                 ORDER BY timestamp ASC, id ASC`,
+				conversationID, afterTS, afterTS, afterEventID)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var evs []*protocol.Event
+	for rows.Next() {
+		ev, err := scanEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		evs = append(evs, ev)
+	}
+	return evs, rows.Err()
+}
+
+func (s *SQLiteStore) LatestStatusEvent(ctx context.Context, conversationID string) (*protocol.Event, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, conversation_id, type, from_agent, data, timestamp
+         FROM events
+         WHERE conversation_id = ? AND type = 'status'
+         ORDER BY timestamp DESC, id DESC LIMIT 1`,
+		conversationID)
+	return scanEvent(row)
+}
+
+// scanEventRow is a shared interface satisfied by both *sql.Row and *sql.Rows.
+type scanEventRow interface {
+	Scan(...any) error
+}
+
+func scanEvent(row scanEventRow) (*protocol.Event, error) {
+	var id, convID, evType, fromAgent, dataJSON, tsStr string
+	err := row.Scan(&id, &convID, &evType, &fromAgent, &dataJSON, &tsStr)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if a.UploadedAt, err = parseTime(uploadedAt); err != nil {
-		return nil, err
-	}
-	return &a, nil
+	ts, _ := parseTime(tsStr)
+	var data protocol.EventData
+	_ = json.Unmarshal([]byte(dataJSON), &data)
+	return &protocol.Event{
+		ID:             id,
+		ConversationID: convID,
+		Type:           protocol.EventType(evType),
+		FromAgent:      fromAgent,
+		Data:           data,
+		Timestamp:      ts,
+	}, nil
 }
 
-func (s *SQLiteStore) ListAttachments(ctx context.Context, taskID string) ([]*protocol.Attachment, error) {
-	rows, err := s.db.QueryContext(ctx, `
-SELECT attachment_id, task_id, filename, content_type, size, uploaded_by, uploaded_at
-FROM attachments WHERE task_id = ?
-ORDER BY uploaded_at ASC`, taskID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+// ---- Delivery State ---------------------------------------------------------
 
-	var atts []*protocol.Attachment
-	for rows.Next() {
-		var a protocol.Attachment
-		var uploadedAt string
-		if err := rows.Scan(
-			&a.AttachmentID, &a.TaskID, &a.Filename, &a.ContentType,
-			&a.Size, &a.UploadedBy, &uploadedAt,
-		); err != nil {
-			return nil, err
-		}
-		if a.UploadedAt, err = parseTime(uploadedAt); err != nil {
-			return nil, err
-		}
-		atts = append(atts, &a)
+func (s *SQLiteStore) GetDeliveryMark(ctx context.Context, targetType, targetID, conversationID string) (string, error) {
+	var lastEventID string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT last_event_id FROM delivery_state
+         WHERE target_type = ? AND target_id = ? AND conversation_id = ?`,
+		targetType, targetID, conversationID,
+	).Scan(&lastEventID)
+	if err == sql.ErrNoRows {
+		return "", nil
 	}
-	return atts, rows.Err()
+	return lastEventID, err
 }
 
-func (s *SQLiteStore) DeleteAttachmentsBefore(ctx context.Context, before time.Time) ([]string, error) {
-	// Select IDs first so callers can clean up files.
+func (s *SQLiteStore) SetDeliveryMark(ctx context.Context, targetType, targetID, conversationID, lastEventID string) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO delivery_state (target_type, target_id, conversation_id, last_event_id)
+VALUES (?, ?, ?, ?)
+ON CONFLICT(target_type, target_id, conversation_id) DO UPDATE SET
+    last_event_id = excluded.last_event_id`,
+		targetType, targetID, conversationID, lastEventID,
+	)
+	return err
+}
+
+func (s *SQLiteStore) ListPendingDelivery(ctx context.Context, targetType, targetID string) ([]DeliveryMark, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT attachment_id FROM attachments WHERE uploaded_at < ?`, fmtTime(before))
+		`SELECT conversation_id, last_event_id FROM delivery_state
+         WHERE target_type = ? AND target_id = ?`,
+		targetType, targetID,
+	)
 	if err != nil {
 		return nil, err
 	}
-	var ids []string
+	defer rows.Close()
+	var marks []DeliveryMark
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
+		var m DeliveryMark
+		if err := rows.Scan(&m.ConversationID, &m.LastEventID); err != nil {
 			return nil, err
 		}
-		ids = append(ids, id)
+		marks = append(marks, m)
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
+	return marks, rows.Err()
+}
 
-	if len(ids) > 0 {
-		if _, err := s.db.ExecContext(ctx,
-			`DELETE FROM attachments WHERE uploaded_at < ?`, fmtTime(before)); err != nil {
-			return nil, err
+func (s *SQLiteStore) InitDeliveryTargets(ctx context.Context, conv *protocol.Conversation) error {
+	for _, agentID := range conv.Participants {
+		_, err := s.db.ExecContext(ctx, `
+INSERT INTO delivery_state (target_type, target_id, conversation_id, last_event_id)
+VALUES ('agent', ?, ?, '')
+ON CONFLICT DO NOTHING`,
+			agentID, conv.ConversationID,
+		)
+		if err != nil {
+			return err
 		}
 	}
-	return ids, nil
+	return nil
 }
 
 // ---- Subscriptions ----------------------------------------------------------
@@ -948,129 +689,6 @@ ORDER BY 1`)
 		channels = append(channels, ch)
 	}
 	return channels, rows.Err()
-}
-
-// ---- Message queue ----------------------------------------------------------
-
-func (s *SQLiteStore) EnqueueMessage(ctx context.Context, recipientAgentID string, msg *protocol.Message) error {
-	payload, err := json.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("store: marshal queued message: %w", err)
-	}
-	_, err = s.db.ExecContext(ctx, `
-INSERT INTO message_queue (agent_id, message_id, payload, enqueued_at)
-VALUES (?,?,?,?)`,
-		recipientAgentID, msg.ID, string(payload), fmtTime(time.Now()))
-	return err
-}
-
-func (s *SQLiteStore) DequeueMessages(ctx context.Context, recipientAgentID string) ([]*protocol.Message, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
-
-	rows, err := tx.QueryContext(ctx, `
-SELECT id, payload FROM message_queue
-WHERE agent_id = ?
-ORDER BY id ASC`, recipientAgentID)
-	if err != nil {
-		return nil, err
-	}
-
-	type row struct {
-		id      int64
-		payload string
-	}
-	var fetched []row
-	for rows.Next() {
-		var r row
-		if err = rows.Scan(&r.id, &r.payload); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		fetched = append(fetched, r)
-	}
-	rows.Close()
-	if err = rows.Err(); err != nil {
-		return nil, err
-	}
-
-	var msgs []*protocol.Message
-	for _, r := range fetched {
-		var m protocol.Message
-		if err = json.Unmarshal([]byte(r.payload), &m); err != nil {
-			return nil, fmt.Errorf("store: unmarshal queued message: %w", err)
-		}
-		msgs = append(msgs, &m)
-	}
-
-	if len(fetched) > 0 {
-		if _, err = tx.ExecContext(ctx,
-			`DELETE FROM message_queue WHERE agent_id = ?`, recipientAgentID); err != nil {
-			return nil, err
-		}
-	}
-
-	if err = tx.Commit(); err != nil {
-		return nil, err
-	}
-	return msgs, nil
-}
-
-func (s *SQLiteStore) QueuedMessageCount(ctx context.Context, recipientAgentID string) (int, error) {
-	var count int
-	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM message_queue WHERE agent_id = ?`, recipientAgentID).Scan(&count)
-	return count, err
-}
-
-func (s *SQLiteStore) QueueStats(ctx context.Context) ([]QueueEntry, error) {
-	rows, err := s.db.QueryContext(ctx, `
-SELECT agent_id, COUNT(*) AS cnt, MIN(enqueued_at) AS oldest
-FROM message_queue
-GROUP BY agent_id
-ORDER BY agent_id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanQueueEntries(rows)
-}
-
-func (s *SQLiteStore) PeerQueueStats(ctx context.Context) ([]QueueEntry, error) {
-	rows, err := s.db.QueryContext(ctx, `
-SELECT peer_id, COUNT(*) AS cnt, MIN(enqueued_at) AS oldest
-FROM peer_message_queue
-GROUP BY peer_id
-ORDER BY peer_id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanQueueEntries(rows)
-}
-
-func scanQueueEntries(rows *sql.Rows) ([]QueueEntry, error) {
-	var entries []QueueEntry
-	for rows.Next() {
-		var e QueueEntry
-		var oldest string
-		if err := rows.Scan(&e.Target, &e.Count, &oldest); err != nil {
-			return nil, err
-		}
-		var err error
-		if e.Oldest, err = parseTime(oldest); err != nil {
-			return nil, err
-		}
-		entries = append(entries, e)
-	}
-	return entries, rows.Err()
 }
 
 // ---- Peers ------------------------------------------------------------------
@@ -1181,86 +799,4 @@ func scanPeers(rows *sql.Rows) ([]*protocol.Peer, error) {
 		peers = append(peers, &p)
 	}
 	return peers, rows.Err()
-}
-
-// ---- Federation message queue -----------------------------------------------
-
-func (s *SQLiteStore) EnqueuePeerMessage(ctx context.Context, peerID string, env *protocol.PeerEnvelope) error {
-	payload, err := json.Marshal(env)
-	if err != nil {
-		return fmt.Errorf("store: marshal peer envelope: %w", err)
-	}
-	_, err = s.db.ExecContext(ctx, `
-INSERT INTO peer_message_queue (peer_id, payload, enqueued_at)
-VALUES (?,?,?)`,
-		peerID, string(payload), fmtTime(time.Now()))
-	return err
-}
-
-func (s *SQLiteStore) DequeuePeerMessages(ctx context.Context, peerID string) ([]*protocol.PeerEnvelope, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
-
-	rows, err := tx.QueryContext(ctx, `
-SELECT id, payload FROM peer_message_queue
-WHERE peer_id = ?
-ORDER BY id ASC`, peerID)
-	if err != nil {
-		return nil, err
-	}
-
-	type qrow struct {
-		id      int64
-		payload string
-	}
-	var fetched []qrow
-	for rows.Next() {
-		var r qrow
-		if err = rows.Scan(&r.id, &r.payload); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		fetched = append(fetched, r)
-	}
-	rows.Close()
-	if err = rows.Err(); err != nil {
-		return nil, err
-	}
-
-	var envs []*protocol.PeerEnvelope
-	for _, r := range fetched {
-		var env protocol.PeerEnvelope
-		if err = json.Unmarshal([]byte(r.payload), &env); err != nil {
-			return nil, fmt.Errorf("store: unmarshal peer envelope: %w", err)
-		}
-		envs = append(envs, &env)
-	}
-
-	if len(fetched) > 0 {
-		if _, err = tx.ExecContext(ctx,
-			`DELETE FROM peer_message_queue WHERE peer_id = ?`, peerID); err != nil {
-			return nil, err
-		}
-	}
-
-	if err = tx.Commit(); err != nil {
-		return nil, err
-	}
-	return envs, nil
-}
-
-// ---- utilities --------------------------------------------------------------
-
-func boolInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }

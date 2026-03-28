@@ -7,11 +7,29 @@ import (
 	"github.com/marcfargas/bifrost/pkg/protocol"
 )
 
+// --- Legacy types (removed in Task 5; kept here for transitional compilation) ---
+
 // QueueEntry holds per-target queue statistics returned by QueueStats/PeerQueueStats.
 type QueueEntry struct {
 	Target string    `json:"target"`
 	Count  int       `json:"count"`
 	Oldest time.Time `json:"oldest"`
+}
+
+// MessageFilter contains optional filters for listing messages.
+type MessageFilter struct {
+	ConversationID string
+	To             string
+	From           string
+	Unread         bool
+}
+
+// TaskFilter contains optional filters for listing tasks.
+type TaskFilter struct {
+	ConversationID string
+	Requester      string
+	Assignee       string
+	Status         protocol.TaskStatus
 }
 
 // AgentFilter contains optional filters for listing agents.
@@ -20,27 +38,19 @@ type AgentFilter struct {
 	PeerHub string               // filter by peer hub; empty means no filter
 }
 
-// MessageFilter contains optional filters for listing messages.
-type MessageFilter struct {
-	ConversationID string
-	To             string
-	From           string
-	Unread         bool // if true, only return unacknowledged messages
-}
-
-// TaskFilter contains optional filters for listing tasks.
-type TaskFilter struct {
-	ConversationID string
-	Requester      string
-	Assignee       string
-	Status         protocol.TaskStatus // zero value means no filter
-}
-
 // ConversationFilter contains optional filters for listing conversations.
 type ConversationFilter struct {
 	Participant string // agent ID that must appear in participants
-	TaskID      string
-	Closed      *bool // nil means no filter; pointer allows explicit true/false
+	IsTask      *bool  // nil = no filter; true = tasks only; false = messages only
+	Closed      *bool  // nil = no filter
+	Assignee    string
+	Requester   string
+}
+
+// DeliveryMark holds one row from delivery_state.
+type DeliveryMark struct {
+	ConversationID string
+	LastEventID    string
 }
 
 // Store defines the full persistence interface for Bifrost.
@@ -66,23 +76,6 @@ type Store interface {
 	// TouchAgent updates last_seen to now for the given agent.
 	TouchAgent(ctx context.Context, agentID string) error
 
-	// --- Messages ---
-
-	// SaveMessage persists a new message.
-	SaveMessage(ctx context.Context, msg *protocol.Message) error
-
-	// GetMessage retrieves a message by ID. Returns nil, nil when not found.
-	GetMessage(ctx context.Context, messageID string) (*protocol.Message, error)
-
-	// ListMessages returns messages matching the filter.
-	ListMessages(ctx context.Context, filter MessageFilter) ([]*protocol.Message, error)
-
-	// AckMessage marks a message as acknowledged.
-	AckMessage(ctx context.Context, messageID string) error
-
-	// DeleteMessagesBefore removes messages with timestamp before the cutoff.
-	DeleteMessagesBefore(ctx context.Context, before time.Time) error
-
 	// --- Conversations ---
 
 	// SaveConversation persists a new conversation.
@@ -94,57 +87,45 @@ type Store interface {
 	// ListConversations returns conversations matching the filter.
 	ListConversations(ctx context.Context, filter ConversationFilter) ([]*protocol.Conversation, error)
 
-	// UpdateConversation replaces the stored conversation with the provided value (full update).
-	UpdateConversation(ctx context.Context, conv *protocol.Conversation) error
-
 	// CloseConversation marks a conversation as closed with the given reason.
 	CloseConversation(ctx context.Context, conversationID string, reason protocol.ConversationCloseReason) error
 
-	// TouchConversation updates last_activity to now for the given conversation.
-	TouchConversation(ctx context.Context, conversationID string) error
+	// --- Events ---
 
-	// ListStaleConversations returns open conversations whose last_activity is before the cutoff.
-	ListStaleConversations(ctx context.Context, before time.Time) ([]*protocol.Conversation, error)
+	// AppendEvent persists a new event to a conversation's stream.
+	AppendEvent(ctx context.Context, ev *protocol.Event) error
 
-	// DeleteConversationsBefore removes closed conversations created before the cutoff.
-	DeleteConversationsBefore(ctx context.Context, before time.Time) error
+	// GetEvent retrieves an event by ID. Returns nil, nil when not found.
+	GetEvent(ctx context.Context, eventID string) (*protocol.Event, error)
 
-	// --- Tasks ---
+	// ListEventsSince returns events in a conversation after (exclusive) afterEventID,
+	// ordered by timestamp ascending. Pass "" to get all events from the start.
+	ListEventsSince(ctx context.Context, conversationID, afterEventID string) ([]*protocol.Event, error)
 
-	// SaveTask persists a new task.
-	SaveTask(ctx context.Context, task *protocol.Task) error
+	// LatestStatusEvent returns the most recent status event for a conversation,
+	// or nil if none exists.
+	LatestStatusEvent(ctx context.Context, conversationID string) (*protocol.Event, error)
 
-	// GetTask retrieves a task by ID. Returns nil, nil when not found.
-	GetTask(ctx context.Context, taskID string) (*protocol.Task, error)
+	// --- Delivery State ---
 
-	// UpdateTask replaces the stored task with the provided value (full update).
-	UpdateTask(ctx context.Context, task *protocol.Task) error
+	// GetDeliveryMark returns the last delivered event ID for a target in a conversation.
+	// Returns "", nil when no mark exists (meaning start from the beginning).
+	GetDeliveryMark(ctx context.Context, targetType, targetID, conversationID string) (string, error)
 
-	// ListTasks returns tasks matching the filter.
-	ListTasks(ctx context.Context, filter TaskFilter) ([]*protocol.Task, error)
+	// SetDeliveryMark upserts the last delivered event ID for a target in a conversation.
+	SetDeliveryMark(ctx context.Context, targetType, targetID, conversationID, lastEventID string) error
 
-	// DeleteCompletedTasksBefore removes tasks with status completed/failed/rejected
-	// whose updated_at is before the cutoff.
-	DeleteCompletedTasksBefore(ctx context.Context, before time.Time) error
+	// ListPendingDelivery returns all (conversationID, lastEventID) pairs where the
+	// target has undelivered events (i.e. delivery_state rows for this target).
+	ListPendingDelivery(ctx context.Context, targetType, targetID string) ([]DeliveryMark, error)
 
-	// --- Attachments ---
-
-	// SaveAttachment persists attachment metadata.
-	SaveAttachment(ctx context.Context, att *protocol.Attachment) error
-
-	// GetAttachment retrieves attachment metadata by ID. Returns nil, nil when not found.
-	GetAttachment(ctx context.Context, attachmentID string) (*protocol.Attachment, error)
-
-	// ListAttachments returns attachments for the given task.
-	ListAttachments(ctx context.Context, taskID string) ([]*protocol.Attachment, error)
-
-	// DeleteAttachmentsBefore removes attachments uploaded before the cutoff and
-	// returns the attachment IDs that were deleted (for external file cleanup).
-	DeleteAttachmentsBefore(ctx context.Context, before time.Time) ([]string, error)
+	// InitDeliveryTargets ensures delivery_state rows exist for all participants
+	// of the conversation, with lastEventID="" for any that don't yet have a row.
+	InitDeliveryTargets(ctx context.Context, conv *protocol.Conversation) error
 
 	// --- Subscriptions (pub/sub) ---
 
-	// Subscribe registers agentID as a subscriber to target (e.g. "channel:general" or "task:<id>").
+	// Subscribe registers agentID as a subscriber to target (e.g. "channel:general").
 	Subscribe(ctx context.Context, agentID, target string) error
 
 	// Unsubscribe removes a subscription.
@@ -155,19 +136,6 @@ type Store interface {
 
 	// ListChannels returns all distinct channel names (strips the "channel:" prefix).
 	ListChannels(ctx context.Context) ([]string, error)
-
-	// --- Offline message queue ---
-
-	// EnqueueMessage adds a message to the persistent queue for a recipient agent.
-	EnqueueMessage(ctx context.Context, recipientAgentID string, msg *protocol.Message) error
-
-	// DequeueMessages atomically retrieves and deletes all queued messages for
-	// the recipient agent, returning them in enqueue order.
-	DequeueMessages(ctx context.Context, recipientAgentID string) ([]*protocol.Message, error)
-
-	// QueuedMessageCount returns the number of messages currently queued for
-	// the recipient agent without removing them.
-	QueuedMessageCount(ctx context.Context, recipientAgentID string) (int, error)
 
 	// --- Peers ---
 
@@ -189,19 +157,47 @@ type Store interface {
 	// TouchPeer updates last_seen to now and resets fail_count to 0 for the given peer.
 	TouchPeer(ctx context.Context, peerID string) error
 
-	// --- Federation message queue ---
+	// --- Legacy: Messages (removed in Task 5) ---
 
-	// EnqueuePeerMessage adds a peer envelope to the outbound queue for a peer hub.
+	SaveMessage(ctx context.Context, msg *protocol.Message) error
+	GetMessage(ctx context.Context, messageID string) (*protocol.Message, error)
+	ListMessages(ctx context.Context, filter MessageFilter) ([]*protocol.Message, error)
+	AckMessage(ctx context.Context, messageID string) error
+	DeleteMessagesBefore(ctx context.Context, before time.Time) error
+
+	// --- Legacy: Tasks (removed in Task 5) ---
+
+	SaveTask(ctx context.Context, task *protocol.Task) error
+	GetTask(ctx context.Context, taskID string) (*protocol.Task, error)
+	UpdateTask(ctx context.Context, task *protocol.Task) error
+	ListTasks(ctx context.Context, filter TaskFilter) ([]*protocol.Task, error)
+	DeleteCompletedTasksBefore(ctx context.Context, before time.Time) error
+
+	// --- Legacy: Attachments (removed in Task 5) ---
+
+	SaveAttachment(ctx context.Context, att *protocol.Attachment) error
+	GetAttachment(ctx context.Context, attachmentID string) (*protocol.Attachment, error)
+	ListAttachments(ctx context.Context, taskID string) ([]*protocol.Attachment, error)
+	DeleteAttachmentsBefore(ctx context.Context, before time.Time) ([]string, error)
+
+	// --- Legacy: Conversation mutations (removed in Task 5) ---
+
+	UpdateConversation(ctx context.Context, conv *protocol.Conversation) error
+	TouchConversation(ctx context.Context, conversationID string) error
+	ListStaleConversations(ctx context.Context, before time.Time) ([]*protocol.Conversation, error)
+	DeleteConversationsBefore(ctx context.Context, before time.Time) error
+
+	// --- Legacy: Offline message queue (removed in Task 5) ---
+
+	EnqueueMessage(ctx context.Context, recipientAgentID string, msg *protocol.Message) error
+	DequeueMessages(ctx context.Context, recipientAgentID string) ([]*protocol.Message, error)
+	QueuedMessageCount(ctx context.Context, recipientAgentID string) (int, error)
+
+	// --- Legacy: Federation message queue (removed in Task 5) ---
+
 	EnqueuePeerMessage(ctx context.Context, peerID string, env *protocol.PeerEnvelope) error
-
-	// DequeuePeerMessages atomically retrieves and deletes all queued envelopes for
-	// the given peer hub, returning them in enqueue order.
 	DequeuePeerMessages(ctx context.Context, peerID string) ([]*protocol.PeerEnvelope, error)
-
-	// QueueStats returns per-agent message queue counts with oldest enqueue time.
 	QueueStats(ctx context.Context) ([]QueueEntry, error)
-
-	// PeerQueueStats returns per-peer message queue counts with oldest enqueue time.
 	PeerQueueStats(ctx context.Context) ([]QueueEntry, error)
 
 	// --- Lifecycle ---
