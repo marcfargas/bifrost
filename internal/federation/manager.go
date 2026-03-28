@@ -858,12 +858,17 @@ func (m *Manager) reconnectKnownPeers(ctx context.Context) {
 		}
 	}
 
-	// Now attempt to re-establish connections for peers with known addresses.
-	for _, peer := range peers {
-		if peer.Address == "" {
-			continue // cannot reconnect without address (e.g., mDNS-only)
-		}
+	// Wait for DHT to bootstrap before attempting reconnections.
+	// Without this delay, peer ID lookups fail because the DHT
+	// hasn't connected to enough nodes yet.
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(15 * time.Second):
+	}
 
+	// Now attempt to re-establish connections.
+	for _, peer := range peers {
 		m.mu.RLock()
 		_, connected := m.peers[peer.PeerID]
 		m.mu.RUnlock()
@@ -871,12 +876,38 @@ func (m *Manager) reconnectKnownPeers(ctx context.Context) {
 			continue
 		}
 
-		m.logger.Info("attempting reconnect to known peer",
-			"peer_id", peer.PeerID, "transport", peer.Transport)
+		addr := peer.Address
+		if addr == "" && peer.Transport == protocol.PeerTransportLibp2p {
+			// libp2p peers paired via magic code have no stored address.
+			// Use the peer ID as the address — the libp2p transport will
+			// look it up on the DHT.
+			addr = peer.PeerID
+		}
+		if addr == "" {
+			continue // truly no way to reconnect
+		}
 
-		_, err := m.ConnectPeer(ctx, PeerTransport(peer.Transport), peer.Address)
-		if err != nil {
-			m.logger.Warn("reconnect failed", "peer_id", peer.PeerID, "error", err)
+		m.logger.Info("attempting reconnect to known peer",
+			"peer_id", peer.PeerID, "transport", peer.Transport, "addr", addr)
+
+		// Retry with backoff — DHT lookups can take time.
+		var connectErr error
+		for attempt := range 3 {
+			if attempt > 0 {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Duration(attempt*15) * time.Second):
+				}
+			}
+			_, connectErr = m.ConnectPeer(ctx, PeerTransport(peer.Transport), addr)
+			if connectErr == nil {
+				break
+			}
+			m.logger.Warn("reconnect attempt failed", "peer_id", peer.PeerID,
+				"attempt", attempt+1, "error", connectErr)
+		}
+		if connectErr != nil {
 			m.store.UpdatePeerStatus(ctx, peer.PeerID, protocol.PeerStatusDisconnected, peer.FailCount+1)
 		}
 	}
