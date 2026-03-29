@@ -94,7 +94,7 @@ func TestSubscribeToTask(t *testing.T) {
 		t.Fatalf("UpdateTask accept: %v", err)
 	}
 
-	// Requester should receive task_updated.
+	// Requester should receive task_updated (via subscriber notification loop).
 	reqNotifs := notifier.received("requester-t")
 	var requesterGot bool
 	for _, n := range reqNotifs {
@@ -107,7 +107,7 @@ func TestSubscribeToTask(t *testing.T) {
 		t.Errorf("requester-t did not receive task_updated; got %v", reqNotifs)
 	}
 
-	// Observer should receive task_updated.
+	// Observer should receive task_updated (via subscriber notification loop).
 	obsNotifs := notifier.received("observer-t")
 	var observerGot bool
 	for _, n := range obsNotifs {

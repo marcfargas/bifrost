@@ -25,17 +25,21 @@ func newConversationManager(s store.Store, h *Hub, inactivityTimeout time.Durati
 	}
 }
 
-// CloseStale finds all open conversations whose last_activity is older than the
+// CloseStale finds all open conversations whose created_at is older than the
 // configured inactivity timeout and closes them with the "inactivity" reason.
 // It returns the number of conversations closed.
 func (m *ConversationManager) CloseStale(ctx context.Context) (int, error) {
 	cutoff := time.Now().Add(-m.inactivityTimeout)
-	convs, err := m.store.ListStaleConversations(ctx, cutoff)
+	notClosed := false
+	convs, err := m.store.ListConversations(ctx, store.ConversationFilter{Closed: &notClosed})
 	if err != nil {
 		return 0, fmt.Errorf("conversations: list stale: %w", err)
 	}
 	closed := 0
 	for _, conv := range convs {
+		if conv.CreatedAt.IsZero() || conv.CreatedAt.After(cutoff) {
+			continue
+		}
 		if err := m.store.CloseConversation(ctx, conv.ConversationID, protocol.ConversationCloseReasonInactivity); err != nil {
 			return closed, fmt.Errorf("conversations: close %s: %w", conv.ConversationID, err)
 		}
@@ -44,7 +48,8 @@ func (m *ConversationManager) CloseStale(ctx context.Context) (int, error) {
 	return closed, nil
 }
 
-// Touch updates the last_activity timestamp for a conversation to now.
+// Touch updates the created_at timestamp for a conversation to now, resetting
+// the inactivity timer used by CloseStale.
 func (m *ConversationManager) Touch(ctx context.Context, convID string) error {
 	return m.store.TouchConversation(ctx, convID)
 }
@@ -65,20 +70,4 @@ func (m *ConversationManager) Get(ctx context.Context, convID string) (*protocol
 		return nil, fmt.Errorf("conversations: get %s: %w", convID, err)
 	}
 	return conv, nil
-}
-
-// LinkToTask marks a conversation as a task conversation by setting IsTask=true.
-func (m *ConversationManager) LinkToTask(ctx context.Context, convID, _ string) error {
-	conv, err := m.store.GetConversation(ctx, convID)
-	if err != nil {
-		return fmt.Errorf("conversations: get %s: %w", convID, err)
-	}
-	if conv == nil {
-		return fmt.Errorf("conversations: not found: %s", convID)
-	}
-	conv.IsTask = true
-	if err := m.store.UpdateConversation(ctx, conv); err != nil {
-		return fmt.Errorf("conversations: update %s: %w", convID, err)
-	}
-	return nil
 }

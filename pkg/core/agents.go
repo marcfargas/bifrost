@@ -68,9 +68,6 @@ func (r *AgentRegistry) Register(ctx context.Context, agent *protocol.Agent) err
 		fed.BroadcastAgentStatus(ctx, agent.AgentID, protocol.AgentStatusOnline)
 	}
 
-	// Flush any queued messages.
-	r.flushQueue(ctx, agent.AgentID)
-
 	return nil
 }
 
@@ -238,18 +235,4 @@ func (r *AgentRegistry) recomputeAllAliases(ctx context.Context) error {
 // This is the public API called by the federation manager after syncing remote agents.
 func (r *AgentRegistry) RecomputeAliases(ctx context.Context) {
 	r.recomputeAllAliases(ctx)
-}
-
-// flushQueue dequeues all persisted messages for agentID and delivers them.
-func (r *AgentRegistry) flushQueue(ctx context.Context, agentID string) {
-	msgs, err := r.store.DequeueMessages(ctx, agentID)
-	if err != nil {
-		return
-	}
-	for _, msg := range msgs {
-		r.hub.NotifyAgent(agentID, Notification{
-			Type:    "message.new",
-			Payload: msg,
-		})
-	}
 }

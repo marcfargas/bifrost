@@ -57,36 +57,22 @@ func (r *MessageRouter) Send(ctx context.Context, msg *protocol.Message) error {
 	}
 	msg.ConversationID = conv.ConversationID
 
-	// Use SyncEngine if available: create an Event and append it.
+	// Use SyncEngine to create an Event and append it.
 	// The SyncEngine handles delivery to both local agents and peer hubs via
 	// delivery_state and ConversationSyncer.
-	if eng := r.hub.Sync(); eng != nil {
-		ev := &protocol.Event{
-			ConversationID: conv.ConversationID,
-			Type:           protocol.EventTypeMessage,
-			FromAgent:      msg.From,
-			Data: protocol.EventData{
-				Body:        msg.Body,
-				MessageType: msg.Type,
-				Priority:    msg.Priority,
-				InReplyTo:   msg.InReplyTo,
-			},
-		}
-		return eng.AppendEvent(ctx, ev)
+	eng := r.hub.Sync()
+	ev := &protocol.Event{
+		ConversationID: conv.ConversationID,
+		Type:           protocol.EventTypeMessage,
+		FromAgent:      msg.From,
+		Data: protocol.EventData{
+			Body:        msg.Body,
+			MessageType: msg.Type,
+			Priority:    msg.Priority,
+			InReplyTo:   msg.InReplyTo,
+		},
 	}
-
-	// Fallback path (no SyncEngine): persist message and route directly.
-	if err := r.store.TouchConversation(ctx, conv.ConversationID); err != nil {
-		return fmt.Errorf("messages: touch conversation: %w", err)
-	}
-	if err := r.store.SaveMessage(ctx, msg); err != nil {
-		return fmt.Errorf("messages: save: %w", err)
-	}
-
-	if strings.HasPrefix(msg.To, "task:") {
-		return r.routeToTaskSubscribers(ctx, msg)
-	}
-	return r.routeToAgent(ctx, msg)
+	return eng.AppendEvent(ctx, ev)
 }
 
 // routeToChannel sends the message to all subscribers of the channel target.
@@ -94,19 +80,6 @@ func (r *MessageRouter) routeToChannel(ctx context.Context, msg *protocol.Messag
 	subscribers, err := r.store.GetSubscribers(ctx, msg.To)
 	if err != nil {
 		return fmt.Errorf("messages: get channel subscribers: %w", err)
-	}
-	notif := Notification{Type: "message.new", Payload: msg}
-	for _, agentID := range subscribers {
-		r.hub.NotifyAgent(agentID, notif)
-	}
-	return nil
-}
-
-// routeToTaskSubscribers sends the message to all subscribers of a task target.
-func (r *MessageRouter) routeToTaskSubscribers(ctx context.Context, msg *protocol.Message) error {
-	subscribers, err := r.store.GetSubscribers(ctx, msg.To)
-	if err != nil {
-		return fmt.Errorf("messages: get task subscribers: %w", err)
 	}
 	notif := Notification{Type: "message.new", Payload: msg}
 	for _, agentID := range subscribers {
@@ -134,46 +107,6 @@ func (r *MessageRouter) routeBroadcast(ctx context.Context, msg *protocol.Messag
 			r.hub.NotifyAgent(a.AgentID, Notification{Type: "message.new", Payload: msg})
 		}
 	}
-}
-
-// routeToAgent resolves the recipient, checks DND, and either delivers or
-// queues the message. Remote agents (PeerHub != "") are delivered via the
-// SyncEngine's peer delivery path and are skipped here.
-func (r *MessageRouter) routeToAgent(ctx context.Context, msg *protocol.Message) error {
-	agent, err := r.hub.Agents().Resolve(ctx, msg.To)
-	if err != nil {
-		return err
-	}
-
-	// Remote agents are handled by the SyncEngine via peer delivery targets.
-	if agent.PeerHub != "" {
-		return nil
-	}
-
-	// DND check: queue unless the DND manager says to deliver.
-	// Build a minimal Event to pass to ShouldQueue (which now takes *protocol.Event).
-	if r.hub.DND() != nil {
-		ev := &protocol.Event{Data: protocol.EventData{Priority: msg.Priority}}
-		if r.hub.DND().ShouldQueue(agent, ev) {
-			if err := r.store.EnqueueMessage(ctx, agent.AgentID, msg); err != nil {
-				return fmt.Errorf("messages: enqueue (dnd): %w", err)
-			}
-			return nil
-		}
-	}
-
-	status := r.hub.NotifyAgent(agent.AgentID, Notification{
-		Type:    "message.new",
-		Payload: msg,
-	})
-
-	if status == protocol.DeliveryStatusQueuedOffline {
-		if err := r.store.EnqueueMessage(ctx, agent.AgentID, msg); err != nil {
-			return fmt.Errorf("messages: enqueue (offline): %w", err)
-		}
-	}
-
-	return nil
 }
 
 // getOrCreateConversation finds an existing open conversation between msg.From
@@ -224,10 +157,8 @@ func (r *MessageRouter) getOrCreateConversation(ctx context.Context, msg *protoc
 	}
 
 	// Initialize delivery targets so the SyncEngine can deliver events.
-	if eng := r.hub.Sync(); eng != nil {
-		if err := r.store.InitDeliveryTargets(ctx, conv); err != nil {
-			return nil, fmt.Errorf("messages: init delivery targets: %w", err)
-		}
+	if err := r.store.InitDeliveryTargets(ctx, conv); err != nil {
+		return nil, fmt.Errorf("messages: init delivery targets: %w", err)
 	}
 
 	return conv, nil

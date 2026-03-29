@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"time"
 
@@ -191,14 +192,17 @@ func (m *TaskManager) UpdateTask(ctx context.Context, callerAgentID, taskID stri
 			},
 		}
 		if eng := m.hub.Sync(); eng != nil {
-			_ = eng.AppendEvent(ctx, descEv)
+			if err := eng.AppendEvent(ctx, descEv); err != nil {
+				slog.Warn("tasks: append description event failed", "task_id", taskID, "error", err)
+			}
 		}
 	}
 
 	task := convToTask(conv, newStatus, summary, reason, conv.CreatedAt, now)
 	_ = updatedAt // consumed above
 
-	// Notify all task subscribers (except the caller) via structured notification.
+	// Notify task channel subscribers (non-participants such as observers) via
+	// structured notification. Participants already receive events via the SyncEngine.
 	subscribers, err := m.store.GetSubscribers(ctx, "task:"+taskID)
 	if err == nil {
 		for _, agentID := range subscribers {

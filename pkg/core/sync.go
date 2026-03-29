@@ -110,14 +110,11 @@ func (e *SyncEngine) syncConversation(ctx context.Context, convID string) error 
 	}
 
 	// Collect all agent targets for this conversation.
-	agentMarks, err := e.store.ListPendingDelivery(ctx, "agent", "")
+	agentMarks, err := e.store.ListPendingDeliveryForConversation(ctx, "agent", convID)
 	if err != nil {
 		return fmt.Errorf("sync: list agent delivery: %w", err)
 	}
 	for _, mark := range agentMarks {
-		if mark.ConversationID != convID {
-			continue
-		}
 		if err := e.deliverToAgent(ctx, conv, mark); err != nil {
 			e.logger.Warn("deliver to agent failed",
 				"conversation_id", convID, "agent_id", mark.TargetID, "error", err)
@@ -125,14 +122,11 @@ func (e *SyncEngine) syncConversation(ctx context.Context, convID string) error 
 	}
 
 	// Collect all peer targets for this conversation.
-	peerMarks, err := e.store.ListPendingDelivery(ctx, "peer", "")
+	peerMarks, err := e.store.ListPendingDeliveryForConversation(ctx, "peer", convID)
 	if err != nil {
 		return fmt.Errorf("sync: list peer delivery: %w", err)
 	}
 	for _, mark := range peerMarks {
-		if mark.ConversationID != convID {
-			continue
-		}
 		if err := e.deliverToPeer(ctx, conv, mark); err != nil {
 			e.logger.Warn("deliver to peer failed",
 				"conversation_id", convID, "peer_id", mark.TargetID, "error", err)

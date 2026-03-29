@@ -35,11 +35,8 @@ func runHousekeeping(ctx context.Context, cfg *config.Config, h *core.Hub) {
 
 // doHousekeeping performs one round of maintenance:
 //  1. Close stale conversations via ConversationManager.
-//  2. Prune old messages.
-//  3. Prune old completed/failed/rejected tasks.
-//  4. Prune old closed conversations.
-//  5. Prune old attachments and remove their files from disk.
-//  6. Prune stale offline agents.
+//  2. Prune old attachments and remove their files from disk.
+//  3. Prune stale offline agents.
 func doHousekeeping(ctx context.Context, cfg *config.Config, h *core.Hub) {
 	now := time.Now()
 	s := h.Store()
@@ -49,25 +46,7 @@ func doHousekeeping(ctx context.Context, cfg *config.Config, h *core.Hub) {
 		_, _ = h.Conversations().CloseStale(ctx)
 	}
 
-	// 2. Prune old messages.
-	if cfg.Retention.Messages.Duration > 0 {
-		cutoff := now.Add(-cfg.Retention.Messages.Duration)
-		_ = s.DeleteMessagesBefore(ctx, cutoff)
-	}
-
-	// 3. Prune old completed tasks.
-	if cfg.Retention.CompletedTasks.Duration > 0 {
-		cutoff := now.Add(-cfg.Retention.CompletedTasks.Duration)
-		_ = s.DeleteCompletedTasksBefore(ctx, cutoff)
-	}
-
-	// 4. Prune old closed conversations.
-	if cfg.Retention.Conversations.Duration > 0 {
-		cutoff := now.Add(-cfg.Retention.Conversations.Duration)
-		_ = s.DeleteConversationsBefore(ctx, cutoff)
-	}
-
-	// 5. Prune old attachments and remove their files from disk.
+	// 2. Prune old attachments and remove their files from disk.
 	if cfg.Retention.Attachments.Duration > 0 {
 		cutoff := now.Add(-cfg.Retention.Attachments.Duration)
 		dataDir := cfg.Storage.DataDir
@@ -84,7 +63,7 @@ func doHousekeeping(ctx context.Context, cfg *config.Config, h *core.Hub) {
 		}
 	}
 
-	// 6. Prune stale offline agents.
+	// 3. Prune stale offline agents.
 	if cfg.Retention.AgentOfflineTTL.Duration > 0 {
 		pruneOfflineAgents(ctx, cfg, h, now)
 	}

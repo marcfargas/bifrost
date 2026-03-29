@@ -106,21 +106,8 @@ func TestConversationAutoCloseWithTask(t *testing.T) {
 		t.Errorf("CloseStale (recent) closed = %d, want 0", closed)
 	}
 
-	// To simulate inactivity, back-date the conversation's last_activity by
-	// touching it to a timestamp older than the 10-minute timeout.
-	// We do this via the store directly since there's no public API for it.
-	backdated := &protocol.Conversation{
-		ConversationID: conv.ConversationID,
-		Participants:   conv.Participants,
-		IsTask:         conv.IsTask,
-		CreatedAt:      conv.CreatedAt,
-		Closed:         false,
-	}
-	// UpdateConversation sets last_activity = now. After saving, back-date
-	// last_activity via the concrete SQLiteStore so CloseStale sees it as stale.
-	if err := hub.Store().UpdateConversation(ctx, backdated); err != nil {
-		t.Fatalf("backdate conversation: %v", err)
-	}
+	// To simulate inactivity, back-date the conversation's created_at via the
+	// concrete SQLiteStore so CloseStale sees it as stale.
 	sq, ok := hub.Store().(*store.SQLiteStore)
 	if !ok {
 		t.Fatalf("store is not *store.SQLiteStore")

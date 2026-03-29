@@ -186,27 +186,11 @@ type PeerSyncAgentsPayload struct {
 	Agents []*Agent `json:"agents"`
 }
 
-// PeerMessagePayload wraps a single message for cross-hub delivery.
-type PeerMessagePayload struct {
-	Message *Message `json:"message"`
-}
-
 // PeerAttachmentData holds inline file content for a cross-hub task attachment.
 type PeerAttachmentData struct {
 	Filename    string `json:"filename"`
 	ContentType string `json:"content_type"`
 	Data        []byte `json:"data"` // base64-encoded by json.Marshal
-}
-
-// PeerTaskCreatePayload carries a new task and optional inline attachments.
-type PeerTaskCreatePayload struct {
-	Task        *Task                 `json:"task"`
-	Attachments []*PeerAttachmentData `json:"attachments,omitempty"`
-}
-
-// PeerTaskUpdatePayload carries a full task state update.
-type PeerTaskUpdatePayload struct {
-	Task *Task `json:"task"`
 }
 
 // PeerAgentStatusPayload notifies a peer of an agent status change.

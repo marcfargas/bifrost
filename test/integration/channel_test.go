@@ -110,13 +110,13 @@ func TestTaskSubscriberNotifications(t *testing.T) {
 		t.Fatalf("accept task: %v", err)
 	}
 
-	// Observer should receive a task_updated notification.
+	// Observer should receive task_updated notification (via subscriber loop).
 	observerNotifs := notifier.NotificationsOfType(observer.AgentID, "task_updated")
 	if len(observerNotifs) == 0 {
 		t.Errorf("observer expected task_updated notification, got 0")
 	}
 
-	// Requester (non-caller) should also receive it.
+	// Requester (non-caller) should also receive task_updated.
 	requesterNotifs := notifier.NotificationsOfType(requester.AgentID, "task_updated")
 	if len(requesterNotifs) == 0 {
 		t.Errorf("requester expected task_updated notification, got 0")

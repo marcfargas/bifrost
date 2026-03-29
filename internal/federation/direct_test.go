@@ -85,20 +85,30 @@ func TestDirectTransportConnectAndAuth(t *testing.T) {
 			t.Errorf("expected incoming from hub-client, got %s", incoming.PeerID())
 		}
 
-		// Test bidirectional messaging
-		testMsg := &protocol.Message{
-			ID:             "test-1",
-			ConversationID: "c1",
-			From:           "agent-s",
-			To:             "agent-c",
-			Type:           protocol.MessageTypeContext,
-			Body:           "hello direct",
-			Priority:       protocol.PriorityNormal,
-			Timestamp:      time.Now(),
+		// Test bidirectional messaging via peer.conversation_sync
+		syncPayload := &protocol.PeerConversationSyncPayload{
+			Conversation: protocol.ConvMeta{
+				ID:           "c1",
+				Participants: []string{"agent-s", "agent-c"},
+			},
+			Events: []*protocol.Event{
+				{
+					ID:             "ev-1",
+					ConversationID: "c1",
+					Type:           protocol.EventTypeMessage,
+					FromAgent:      "agent-s",
+					Data: protocol.EventData{
+						Body:        "hello direct",
+						MessageType: protocol.MessageTypeContext,
+						Priority:    protocol.PriorityNormal,
+					},
+					Timestamp: time.Now(),
+				},
+			},
 		}
-		payload, _ := json.Marshal(protocol.PeerMessagePayload{Message: testMsg})
+		payload, _ := json.Marshal(syncPayload)
 		env := &protocol.PeerEnvelope{
-			Method:  "peer.message",
+			Method:  "peer.conversation_sync",
 			ID:      "e1",
 			Version: protocol.ProtocolVersion,
 			From:    "hub-server",
@@ -115,8 +125,8 @@ func TestDirectTransportConnectAndAuth(t *testing.T) {
 		if err != nil {
 			t.Fatalf("client receive: %v", err)
 		}
-		if received.Method != "peer.message" {
-			t.Errorf("expected peer.message, got %s", received.Method)
+		if received.Method != "peer.conversation_sync" {
+			t.Errorf("expected peer.conversation_sync, got %s", received.Method)
 		}
 
 		incoming.Close()

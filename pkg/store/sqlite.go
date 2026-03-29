@@ -410,8 +410,8 @@ FROM conversations WHERE 1=1`
 		args = append(args, filter.Requester)
 	}
 	if filter.Participant != "" {
-		q += ` AND participants LIKE ?`
-		args = append(args, "%"+filter.Participant+"%")
+		q += ` AND participants LIKE '%"' || ? || '"%'`
+		args = append(args, filter.Participant)
 	}
 	q += ` ORDER BY created_at DESC`
 
@@ -435,6 +435,24 @@ func (s *SQLiteStore) CloseConversation(ctx context.Context, conversationID stri
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE conversations SET closed = 1, closed_reason = ? WHERE id = ?`,
 		string(reason), conversationID,
+	)
+	return err
+}
+
+func (s *SQLiteStore) TouchConversation(ctx context.Context, conversationID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET created_at = ? WHERE id = ?`,
+		fmtTime(time.Now()), conversationID,
+	)
+	return err
+}
+
+// SetLastActivity is a test helper that back-dates the created_at of a conversation.
+// Used by conversation tests to simulate inactivity.
+func (s *SQLiteStore) SetLastActivity(ctx context.Context, conversationID string, t time.Time) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET created_at = ? WHERE id = ?`,
+		fmtTime(t), conversationID,
 	)
 	return err
 }
@@ -625,6 +643,27 @@ func (s *SQLiteStore) ListPendingDelivery(ctx context.Context, targetType, targe
 			targetType, targetID,
 		)
 	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var marks []DeliveryMark
+	for rows.Next() {
+		var m DeliveryMark
+		if err := rows.Scan(&m.TargetID, &m.ConversationID, &m.LastEventID); err != nil {
+			return nil, err
+		}
+		marks = append(marks, m)
+	}
+	return marks, rows.Err()
+}
+
+func (s *SQLiteStore) ListPendingDeliveryForConversation(ctx context.Context, targetType, conversationID string) ([]DeliveryMark, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT target_id, conversation_id, last_event_id FROM delivery_state
+         WHERE target_type = ? AND conversation_id = ?`,
+		targetType, conversationID,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -832,4 +871,69 @@ func scanPeers(rows *sql.Rows) ([]*protocol.Peer, error) {
 		peers = append(peers, &p)
 	}
 	return peers, rows.Err()
+}
+
+// ---- Attachments ------------------------------------------------------------
+
+func (s *SQLiteStore) SaveAttachment(ctx context.Context, att *protocol.Attachment) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO attachments
+    (attachment_id, task_id, filename, content_type, size, uploaded_by, uploaded_at)
+VALUES (?,?,?,?,?,?,?)`,
+		att.AttachmentID, att.TaskID, att.Filename, att.ContentType,
+		att.Size, att.UploadedBy, fmtTime(att.UploadedAt),
+	)
+	return err
+}
+
+func (s *SQLiteStore) GetAttachment(ctx context.Context, attachmentID string) (*protocol.Attachment, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT attachment_id, task_id, filename, content_type, size, uploaded_by, uploaded_at
+FROM attachments WHERE attachment_id = ?`, attachmentID)
+
+	var a protocol.Attachment
+	var uploadedAt string
+	err := row.Scan(
+		&a.AttachmentID, &a.TaskID, &a.Filename, &a.ContentType,
+		&a.Size, &a.UploadedBy, &uploadedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if a.UploadedAt, err = parseTime(uploadedAt); err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+func (s *SQLiteStore) DeleteAttachmentsBefore(ctx context.Context, before time.Time) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT attachment_id FROM attachments WHERE uploaded_at < ?`, fmtTime(before))
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if len(ids) > 0 {
+		if _, err := s.db.ExecContext(ctx,
+			`DELETE FROM attachments WHERE uploaded_at < ?`, fmtTime(before)); err != nil {
+			return nil, err
+		}
+	}
+	return ids, nil
 }

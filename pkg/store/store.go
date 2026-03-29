@@ -7,23 +7,6 @@ import (
 	"github.com/marcfargas/bifrost/pkg/protocol"
 )
 
-// --- Legacy types (removed in Task 5; kept here for transitional compilation) ---
-
-// QueueEntry holds per-target queue statistics returned by QueueStats/PeerQueueStats.
-type QueueEntry struct {
-	Target string    `json:"target"`
-	Count  int       `json:"count"`
-	Oldest time.Time `json:"oldest"`
-}
-
-// MessageFilter contains optional filters for listing messages.
-type MessageFilter struct {
-	ConversationID string
-	To             string
-	From           string
-	Unread         bool
-}
-
 // TaskFilter contains optional filters for listing tasks.
 type TaskFilter struct {
 	ConversationID string
@@ -91,6 +74,23 @@ type Store interface {
 	// CloseConversation marks a conversation as closed with the given reason.
 	CloseConversation(ctx context.Context, conversationID string, reason protocol.ConversationCloseReason) error
 
+	// TouchConversation updates the created_at timestamp to now, resetting the
+	// inactivity timer used by ConversationManager.CloseStale.
+	TouchConversation(ctx context.Context, conversationID string) error
+
+	// --- Attachments ---
+
+	// SaveAttachment persists attachment metadata. The file must be stored on disk
+	// before calling this.
+	SaveAttachment(ctx context.Context, att *protocol.Attachment) error
+
+	// GetAttachment retrieves attachment metadata by ID. Returns nil, nil when not found.
+	GetAttachment(ctx context.Context, attachmentID string) (*protocol.Attachment, error)
+
+	// DeleteAttachmentsBefore removes attachment records older than before and returns
+	// their IDs so callers can delete the corresponding files.
+	DeleteAttachmentsBefore(ctx context.Context, before time.Time) ([]string, error)
+
 	// --- Events ---
 
 	// AppendEvent persists a new event to a conversation's stream.
@@ -119,6 +119,11 @@ type Store interface {
 	// ListPendingDelivery returns all (conversationID, lastEventID) pairs where the
 	// target has undelivered events (i.e. delivery_state rows for this target).
 	ListPendingDelivery(ctx context.Context, targetType, targetID string) ([]DeliveryMark, error)
+
+	// ListPendingDeliveryForConversation returns all delivery marks for the given
+	// targetType scoped to a single conversation. Used by syncConversation to avoid
+	// scanning all delivery rows.
+	ListPendingDeliveryForConversation(ctx context.Context, targetType, conversationID string) ([]DeliveryMark, error)
 
 	// InitDeliveryTargets ensures delivery_state rows exist for all participants
 	// of the conversation, with lastEventID="" for any that don't yet have a row.
@@ -157,49 +162,6 @@ type Store interface {
 
 	// TouchPeer updates last_seen to now and resets fail_count to 0 for the given peer.
 	TouchPeer(ctx context.Context, peerID string) error
-
-	// --- Legacy: Messages (removed in Task 5) ---
-
-	SaveMessage(ctx context.Context, msg *protocol.Message) error
-	GetMessage(ctx context.Context, messageID string) (*protocol.Message, error)
-	ListMessages(ctx context.Context, filter MessageFilter) ([]*protocol.Message, error)
-	AckMessage(ctx context.Context, messageID string) error
-	DeleteMessagesBefore(ctx context.Context, before time.Time) error
-
-	// --- Legacy: Tasks (removed in Task 5) ---
-
-	SaveTask(ctx context.Context, task *protocol.Task) error
-	GetTask(ctx context.Context, taskID string) (*protocol.Task, error)
-	UpdateTask(ctx context.Context, task *protocol.Task) error
-	ListTasks(ctx context.Context, filter TaskFilter) ([]*protocol.Task, error)
-	DeleteCompletedTasksBefore(ctx context.Context, before time.Time) error
-
-	// --- Legacy: Attachments (removed in Task 5) ---
-
-	SaveAttachment(ctx context.Context, att *protocol.Attachment) error
-	GetAttachment(ctx context.Context, attachmentID string) (*protocol.Attachment, error)
-	ListAttachments(ctx context.Context, taskID string) ([]*protocol.Attachment, error)
-	DeleteAttachmentsBefore(ctx context.Context, before time.Time) ([]string, error)
-
-	// --- Legacy: Conversation mutations (removed in Task 5) ---
-
-	UpdateConversation(ctx context.Context, conv *protocol.Conversation) error
-	TouchConversation(ctx context.Context, conversationID string) error
-	ListStaleConversations(ctx context.Context, before time.Time) ([]*protocol.Conversation, error)
-	DeleteConversationsBefore(ctx context.Context, before time.Time) error
-
-	// --- Legacy: Offline message queue (removed in Task 5) ---
-
-	EnqueueMessage(ctx context.Context, recipientAgentID string, msg *protocol.Message) error
-	DequeueMessages(ctx context.Context, recipientAgentID string) ([]*protocol.Message, error)
-	QueuedMessageCount(ctx context.Context, recipientAgentID string) (int, error)
-
-	// --- Legacy: Federation message queue (removed in Task 5) ---
-
-	EnqueuePeerMessage(ctx context.Context, peerID string, env *protocol.PeerEnvelope) error
-	DequeuePeerMessages(ctx context.Context, peerID string) ([]*protocol.PeerEnvelope, error)
-	QueueStats(ctx context.Context) ([]QueueEntry, error)
-	PeerQueueStats(ctx context.Context) ([]QueueEntry, error)
 
 	// --- Lifecycle ---
 
