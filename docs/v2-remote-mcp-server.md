@@ -75,9 +75,37 @@ The server is the single source of truth. No replication, no sync protocol.
 - `bifrost_subscribe` — join a channel
 - `bifrost_dnd` — do not disturb
 
-## Push notifications
+## Push notifications — Claude Channels
 
-MCP Streamable HTTP supports SSE. The server pushes `notifications/claude/channel` events via the SSE stream. Same `<channel>` tags the agent sees today.
+Regular MCP servers can only respond when the agent calls a tool. For real-time messaging, we need **push** — the server sends events the agent didn't ask for.
+
+Claude Code supports this via the **channel** system (same mechanism used by Telegram, Discord, iMessage plugins). It requires:
+
+1. **Server declares `claude/channel` capability** in its MCP initialize response:
+   ```json
+   { "capabilities": { "experimental": { "claude/channel": {} } } }
+   ```
+
+2. **Server pushes `notifications/claude/channel` events** via the SSE stream:
+   ```json
+   { "jsonrpc": "2.0", "method": "notifications/claude/channel",
+     "params": { "content": "Hello from agent-a", "meta": { "from": "agent-a", "type": "question" } } }
+   ```
+
+3. **Claude Code surfaces the notification as a `<channel>` tag** in the conversation:
+   ```
+   <channel source="bifrost" from="agent-a" type="question">
+   Hello from agent-a
+   </channel>
+   ```
+
+The agent sees the message immediately, can reply, and the conversation flows naturally.
+
+**Transport:** MCP Streamable HTTP uses SSE (Server-Sent Events) for server→client push. The MCP client maintains a persistent SSE connection. The server writes events to this stream whenever another agent sends a message.
+
+**Requirement:** Claude Code currently requires `--dangerously-load-development-channels server:name` for custom channel servers, or the server must be published as an approved plugin. Channels also require claude.ai login (not API key auth). These are Claude Code platform constraints that may change.
+
+**Key reference:** https://code.claude.com/docs/en/channels-reference
 
 ## What to carry from v1
 
