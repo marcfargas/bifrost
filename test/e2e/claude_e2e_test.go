@@ -103,6 +103,7 @@ func (te *testEnv) runClaude(t *testing.T, prompt string, extraArgs ...string) s
 		"-p", prompt,
 		"--model", "haiku",
 		"--max-turns", "5",
+		"--max-budget-usd", "0.10",
 	}
 	args = append(args, extraArgs...)
 
