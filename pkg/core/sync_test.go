@@ -246,8 +246,10 @@ func (f *fakeSyncer) count() int {
 
 // TestBatchSyncForPeer: multiple pending events delivered on reconnect.
 func TestBatchSyncForPeer(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	h, s := newTestHub(t)
+	_ = s // ensure store outlives sync engine via deferred cancel
 	syncer := &fakeSyncer{}
 
 	eng := core.NewSyncEngine(s, h, nil)

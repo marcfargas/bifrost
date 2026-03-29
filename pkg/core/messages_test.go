@@ -110,7 +110,8 @@ func TestSendMessageDelivered(t *testing.T) {
 }
 
 func TestSendMessageToUnknownAgent(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	hub := newTestHub(t)
 
 	msg := &protocol.Message{

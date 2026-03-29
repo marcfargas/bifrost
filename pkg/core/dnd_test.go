@@ -11,7 +11,8 @@ import (
 // registerDNDTestAgents registers a sender and a receiver in hub and returns them.
 func registerDNDTestAgents(t *testing.T, hub *Hub) (sender, receiver *protocol.Agent) {
 	t.Helper()
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	sender = &protocol.Agent{
 		AgentID:     "dnd-sender",
@@ -41,7 +42,8 @@ func registerDNDTestAgents(t *testing.T, hub *Hub) (sender, receiver *protocol.A
 }
 
 func TestDNDEnableQueuesMessages(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	hub := newTestHub(t)
 
 	notifier := newTestNotifier()
@@ -88,7 +90,8 @@ func TestDNDEnableQueuesMessages(t *testing.T) {
 }
 
 func TestDNDUrgentBreaksThrough(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	hub := newTestHub(t)
 
 	notifier := newTestNotifier()
@@ -132,7 +135,8 @@ func TestDNDUrgentBreaksThrough(t *testing.T) {
 }
 
 func TestDNDDisableFlushesQueue(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	hub := newTestHub(t)
 
 	notifier := newTestNotifier()
