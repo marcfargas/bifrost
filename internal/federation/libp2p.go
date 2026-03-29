@@ -149,8 +149,10 @@ func (t *Libp2pTransport) Name() string { return "libp2p" }
 
 // Start begins listening for incoming bifrost streams and bootstraps the DHT.
 func (t *Libp2pTransport) Start(ctx context.Context, incoming chan<- PeerConn) error {
+	t.mu.Lock()
 	ctx, t.cancel = context.WithCancel(ctx)
 	t.incoming = incoming
+	t.mu.Unlock()
 
 	// Set stream handler for incoming connections first, before any
 	// DHT/bootstrap work that might trigger inbound streams.
@@ -258,8 +260,11 @@ func (t *Libp2pTransport) Connect(ctx context.Context, address string) (PeerConn
 
 // Stop shuts down the libp2p host and DHT.
 func (t *Libp2pTransport) Stop() error {
-	if t.cancel != nil {
-		t.cancel()
+	t.mu.Lock()
+	cancel := t.cancel
+	t.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 	if t.dht != nil {
 		if err := t.dht.Close(); err != nil {
