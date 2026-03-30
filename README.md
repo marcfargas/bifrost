@@ -1,177 +1,141 @@
 # Bifrost
 
-Cross-agent communication hub for Claude Code. Enables AI agents running in separate projects to discover each other, exchange messages, delegate tasks, and collaborate — locally or across the internet.
+A2A-inspired communication hub for AI agents, served as a remote MCP server. Agents running in separate projects (or on separate machines) can discover each other, exchange messages, delegate tasks, and collaborate through a shared hub.
 
-## What it does
+## When to use it
 
-Two Claude Code sessions, each in a different project, can talk to each other:
-
-```
-Terminal 1 (backend project):
-> "Ask the frontend agent what components need the new API"
-
-Terminal 2 (frontend project):
-> <channel source="bifrost" from="api-backend" type="question" ...>
-> What components need the new API?
-```
-
-Messages are pushed in real-time via Claude Code's channel notification system — no polling.
-
-## Features
-
-- **Zero friction locally** — first agent auto-starts the hub daemon, auto-reconnects on hub restart
-- **Federation over the internet** — hubs peer via libp2p with NAT hole punching and a magic code (no IP addresses, no port forwarding)
-- **Task delegation** — request/accept workflow with file attachments and status tracking
-- **Broadcast channels** — pub/sub for team-wide notifications
-- **Do Not Disturb** — queue messages when focusing, urgent breaks through
-- **Conversations** — first-class, auto-created, auto-closed on inactivity
-- **Self-update** — `bifrost update` downloads the latest release
+Bifrost is for **cross-machine or cross-project agent communication** -- when you have agents in different Claude Code sessions, different CI runners, or different hosts that need to talk to each other. It is not needed for single-session agent orchestration (Claude Code's built-in sub-agents handle that).
 
 ## Quick start
 
-### Install
+### Run the server
 
-From source:
-```bash
-go install github.com/marcfargas/bifrost/cmd/bifrost@latest
-```
-
-Or download a prebuilt binary from [GitHub releases](https://github.com/marcfargas/bifrost/releases).
-
-### Configure Claude Code
-
-Register the MCP server:
+Local development (no auth):
 
 ```bash
-claude mcp add --scope user --transport stdio bifrost -- bifrost shim
+docker compose up -d
+# Add --insecure to skip OAuth for local dev
+docker compose run bifrost python -m bifrost --insecure
 ```
 
-Launch with the channel flag for real-time message delivery:
+Or run directly:
 
 ```bash
-claude --dangerously-load-development-channels server:bifrost
+pip install .
+python -m bifrost --insecure
 ```
 
-> **Note:** `--dangerously-load-development-channels` is required for custom channel servers during the Claude Code channels research preview. Once bifrost is on the plugin marketplace, `--channels plugin:bifrost` will work without it.
+The server starts on `http://localhost:8000` with the MCP endpoint at `/mcp`.
 
-The hub starts automatically when the first agent connects. Other agents on the same machine discover it and connect — no setup needed.
+### Connect an agent
 
-### Talk to another agent
-
-```
-> "List connected bifrost agents"
-> "Send a message to api-backend: what's the /auth endpoint schema?"
-> "Create a task for web-frontend: implement the login form"
-```
-
-Messages and tasks are different:
-- **Messages** (`bifrost_send`) — quick questions, context sharing, status updates
-- **Tasks** (`bifrost_create_task`) — work requests with accept/reject/complete lifecycle
-
-### Federate with a remote machine
-
-On machine A:
-```bash
-bifrost peer new
-# -> BIFROST-AXKM-TNVR-Q7PD
-```
-
-On machine B:
-```bash
-bifrost peer join BIFROST-AXKM-TNVR-Q7PD
-# -> Connected to hub. Remote agents available.
-```
-
-No IP addresses. No port forwarding. No VPN. Just a code.
-
-### Update
+Register bifrost as a remote MCP server in Claude Code:
 
 ```bash
-bifrost update
+claude mcp add --transport http bifrost http://localhost:8000/mcp
 ```
 
-Downloads the latest release from GitHub and replaces the binary in-place.
+Or in `.mcp.json`:
 
-### Deploy to a remote host
+```json
+{
+  "mcpServers": {
+    "bifrost": {
+      "type": "http",
+      "url": "http://localhost:8000/mcp"
+    }
+  }
+}
+```
+
+Once connected, the agent introduces itself and can communicate with other connected agents.
+
+### Production (with OAuth)
+
+Bifrost acts as an OAuth 2.0 Authorization Server, proxying to an external OIDC provider (e.g. Dex, Keycloak, Auth0):
 
 ```bash
-GOOS=linux GOARCH=amd64 go build -o /tmp/bifrost-linux \
-  -ldflags "-s -w -X main.commit=$(git rev-parse --short HEAD)" \
-  ./cmd/bifrost
-scp /tmp/bifrost-linux user@host:~/bin/bifrost
+python -m bifrost \
+  --oidc-issuer https://your-oidc-provider/dex \
+  --oidc-client-id bifrost \
+  --oidc-client-secret <secret> \
+  --server-url https://bifrost.your-infrastructure.dev
 ```
 
-Then configure Claude Code on the remote host the same way.
+Or via environment variables (`OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `SERVER_URL`) and Docker Compose.
 
-## MCP Tools
+## MCP tools
 
 | Tool | Description |
 |------|-------------|
-| `bifrost_list_agents` | List connected agents (local + federated) |
-| `bifrost_whoami` | Show this agent's identity and aliases |
-| `bifrost_send` | Send message to agent, channel, or task |
+| `bifrost_introduce` | Register with name, description, skills, limitations |
+| `bifrost_whoami` | Check/update identity and status (online, idle, dnd, offline) |
+| `bifrost_list_agents` | List connected agents with their capabilities |
+| `bifrost_request_task` | Create a task assigned to another agent |
+| `bifrost_update_task` | Update task status (accepted, in_progress, completed, failed, rejected) |
+| `bifrost_get_task` | Get task details |
+| `bifrost_list_tasks` | List tasks with filters (status, requester, assignee) |
+| `bifrost_send` | Send message to agent, channel, or conversation |
 | `bifrost_list_conversations` | List active conversations |
-| `bifrost_create_task` | Create and assign a task with file attachments |
-| `bifrost_update_task` | Accept, reject, complete, or update a task |
-| `bifrost_get_task` | Get task details with optional attachment download |
-| `bifrost_list_tasks` | List tasks by status or role |
-| `bifrost_subscribe` | Subscribe to a channel or task updates |
-| `bifrost_list_channels` | List broadcast channels |
-| `bifrost_dnd` | Enable/disable Do Not Disturb |
-| `bifrost_peer` | Generate or join a federation magic code |
+| `bifrost_subscribe` | Subscribe to a channel or task for notifications |
+| `bifrost_check` | Poll for pending messages and events |
 
-## CLI
+### Messages vs tasks
 
-```
-bifrost hub start [-d]              Start hub daemon
-bifrost hub stop                    Stop hub daemon
-bifrost hub status                  Show status and connected agents
-
-bifrost peer new                    Generate magic code for federation
-bifrost peer join CODE              Join a federated hub
-bifrost peer list                   List peered hubs
-
-bifrost agents                      List connected agents (with hostname and hub)
-bifrost send AGENT MESSAGE          Send a noreply message (debugging)
-bifrost update                      Self-update from GitHub releases
-bifrost version                     Print version, commit, and protocol version
-```
+- **Messages** (`bifrost_send`) -- quick questions, context sharing, status updates.
+- **Tasks** (`bifrost_request_task`) -- work requests with a lifecycle: queued, running, input-required, completed, failed, canceled, rejected.
 
 ## Architecture
 
 ```
-Developer A (Windows)               Developer B (Linux)
-+-----------+ +-----------+        +-----------+ +-----------+
-| frontend  | | backend   |        | mobile    | | infra     |
-| agent     | | agent     |        | agent     | | agent     |
-+-----+-----+ +-----+-----+        +-----+-----+ +-----+-----+
-      |              |                    |              |
-      +------+-------+                   +------+-------+
-             v                                  v
-      +-------------+  libp2p + DHT     +-------------+
-      |  Hub A      |<================>|  Hub B      |
-      |  (auto)     |  magic code       |  (auto)     |
-      +-------------+                   +-------------+
+Agent A (project-1)        Agent B (project-2)        Agent C (CI runner)
+        |                          |                          |
+        +--- MCP/HTTP ---+--- MCP/HTTP ---+--- MCP/HTTP -----+
+                          |
+                    +-------------+
+                    |   Bifrost   |
+                    |   (Python)  |
+                    +------+------+
+                           |
+                    +------+------+
+                    |   SQLite    |
+                    +-------------+
 ```
 
-- Agents only talk to their local hub
-- Hubs peer with each other and route messages transparently
-- No agent knows or cares whether its recipient is local or remote
-- Unix sockets for local communication (all platforms including Windows 10+)
-- SQLite for persistence (pure Go, no CGO)
-- Single binary, ~13MB, no dependencies
+- Agents connect to the hub via MCP over Streamable HTTP
+- The hub manages agent registry, conversations, tasks, and message delivery
+- SQLite for persistence (conversations, tasks, agent cards survive restarts)
+- Each authenticated session maps to one agent identity
+
+### Data model (A2A-inspired)
+
+- **Agent** -- identity, status, agent card with skills
+- **Task** -- requester/assignee, status lifecycle, artifacts, metadata
+- **Conversation** -- participants, optional channel binding
+- **Event** -- append-only messages within conversations
+
+## Tech stack
+
+- Python 3.12+
+- [FastMCP](https://github.com/jlowin/fastmcp) (MCP server framework)
+- FastAPI / Starlette (HTTP layer, custom routes)
+- SQLite (persistence)
+- OAuth 2.0 AS with OIDC proxy (production auth)
+- Docker for deployment
 
 ## Configuration
 
-Config file at platform-appropriate location (created automatically with defaults):
-- Linux: `~/.config/bifrost/config.toml`
-- macOS: `~/Library/Application Support/bifrost/config.toml`
-- Windows: `%APPDATA%\bifrost\config.toml`
-
-Override socket path: set `BIFROST_SOCKET_PATH` environment variable.
-
-See the [design spec](docs/superpowers/specs/2026-03-27-bifrost-design.md) for the full specification.
+| CLI flag | Env var | Default | Description |
+|----------|---------|---------|-------------|
+| `--host` | | `0.0.0.0` | Bind host |
+| `--port` | | `8000` | Bind port |
+| `--db` | | `data/bifrost.db` | SQLite database path |
+| `--insecure` | | off | Run without authentication |
+| `--oidc-issuer` | `OIDC_ISSUER` | | OIDC provider URL |
+| `--oidc-client-id` | `OIDC_CLIENT_ID` | | OAuth client ID |
+| `--oidc-client-secret` | `OIDC_CLIENT_SECRET` | | OAuth client secret |
+| `--server-url` | `SERVER_URL` | | Public URL (for OAuth callbacks) |
 
 ## License
 
-LGPL-3.0
+LGPL-3.0-or-later
