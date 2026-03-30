@@ -129,10 +129,12 @@ def create_app(config: Config) -> FastMCP:
     # ------------------------------------------------------------------
 
     def _ensure_session_agent() -> str:
-        """Get or create a placeholder agent for the current session.
+        """Get or create an agent for the current session.
 
-        On first call, creates an unnamed agent using the OAuth client_id.
-        After bifrost_introduce, the agent gets a proper name and card.
+        Reconnection logic:
+        1. If session already has an agent → return it
+        2. If OAuth user has exactly one existing agent → reconnect to it
+        3. Otherwise → create unnamed placeholder (bifrost_introduce will name it)
         """
         from mcp.server.auth.middleware.auth_context import get_access_token
 
@@ -142,15 +144,25 @@ def create_app(config: Config) -> FastMCP:
         if session_key in session_agents:
             return session_agents[session_key]
 
-        # Auto-register placeholder agent
+        # Try to reconnect by oauth_subject
         if access_token is not None:
-            placeholder_name = f"unnamed-{access_token.client_id[:8]}"
             oauth_subject = access_token.client_id
-        else:
-            placeholder_name = f"unnamed-{secrets.token_hex(4)}"
-            oauth_subject = ""
+            existing = store.list_agents_by_oauth_subject(oauth_subject)
+            if len(existing) == 1:
+                # Single agent for this user — auto-reconnect
+                agent = agents.register(existing[0].name, oauth_subject=oauth_subject)
+                session_agents[session_key] = agent.id
+                return agent.id
 
-        agent = agents.register(placeholder_name, oauth_subject=oauth_subject)
+            # Multiple agents or none — create placeholder
+            placeholder_name = f"unnamed-{oauth_subject[:8]}"
+            agent = agents.register(placeholder_name, oauth_subject=oauth_subject)
+            session_agents[session_key] = agent.id
+            return agent.id
+
+        # Insecure mode — placeholder
+        placeholder_name = f"unnamed-{secrets.token_hex(4)}"
+        agent = agents.register(placeholder_name)
         session_agents[session_key] = agent.id
         return agent.id
 
