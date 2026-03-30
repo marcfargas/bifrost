@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import secrets
 from typing import Any
 
 from starlette.requests import Request
@@ -128,13 +127,10 @@ def create_app(config: Config) -> FastMCP:
     # Helper to get agent_id in tool handlers
     # ------------------------------------------------------------------
 
-    def _ensure_session_agent() -> str:
-        """Get or create an agent for the current session.
+    def _get_session_agent() -> str:
+        """Get the agent_id for the current session.
 
-        Reconnection logic:
-        1. If session already has an agent → return it
-        2. If OAuth user has exactly one existing agent → reconnect to it
-        3. Otherwise → create unnamed placeholder (bifrost_introduce will name it)
+        Raises ValueError if the agent hasn't introduced itself yet.
         """
         from mcp.server.auth.middleware.auth_context import get_access_token
 
@@ -144,54 +140,22 @@ def create_app(config: Config) -> FastMCP:
         if session_key in session_agents:
             return session_agents[session_key]
 
-        # Try to reconnect by oauth_subject
-        if access_token is not None:
-            oauth_subject = access_token.client_id
-            existing = store.list_agents_by_oauth_subject(oauth_subject)
-            if len(existing) == 1:
-                # Single agent for this user — auto-reconnect
-                agent = agents.register(existing[0].name, oauth_subject=oauth_subject)
-                session_agents[session_key] = agent.id
-                return agent.id
-
-            # Multiple agents or none — create placeholder
-            placeholder_name = f"unnamed-{oauth_subject[:8]}"
-            agent = agents.register(placeholder_name, oauth_subject=oauth_subject)
-            session_agents[session_key] = agent.id
-            return agent.id
-
-        # Insecure mode — placeholder
-        placeholder_name = f"unnamed-{secrets.token_hex(4)}"
-        agent = agents.register(placeholder_name)
-        session_agents[session_key] = agent.id
-        return agent.id
+        raise ValueError(
+            "You must call bifrost_introduce first to register your agent."
+        )
 
     def _introduce_agent(name: str) -> str:
-        """Name and register the agent for the current session."""
-        # Ensure we have a placeholder first
-        agent_id = _ensure_session_agent()
-
-        # Derive oauth_subject from token
+        """Register or reconnect an agent by name. Binds to current session."""
         from mcp.server.auth.middleware.auth_context import get_access_token
+
         access_token = get_access_token()
+        session_key = _get_session_key(access_token, insecure=config.insecure)
         oauth_subject = access_token.client_id if access_token else ""
 
-        # Rename the placeholder to the chosen name
-        try:
-            agents.rename(agent_id, name)
-        except ValueError:
-            # Name taken — try to reconnect to existing agent with that name
-            existing = agents.resolve(name)
-            if existing:
-                # Update session to point to the existing agent
-                session_key = _get_session_key(access_token, insecure=config.insecure)
-                session_agents[session_key] = existing.id
-                # Re-register (sets online)
-                agents.register(name, oauth_subject=oauth_subject)
-                return existing.id
-            raise
-
-        return agent_id
+        # register() handles both new and returning agents
+        agent = agents.register(name, oauth_subject=oauth_subject)
+        session_agents[session_key] = agent.id
+        return agent.id
 
     # ------------------------------------------------------------------
     # Tool registration
@@ -233,7 +197,7 @@ def create_app(config: Config) -> FastMCP:
         dnd_reason: str = "",
     ) -> str:
         """Check your identity or update your status (online, idle, dnd, offline)."""
-        agent_id = _ensure_session_agent()
+        agent_id = _get_session_agent()
         return handlers.handle_whoami(
             agent_id=agent_id,
             status=status or None,
@@ -252,7 +216,7 @@ def create_app(config: Config) -> FastMCP:
         description: str = "",
     ) -> str:
         """Request another agent to perform a task."""
-        agent_id = _ensure_session_agent()
+        agent_id = _get_session_agent()
         metadata: dict[str, str] = {}
         if title:
             metadata["title"] = title
@@ -272,7 +236,7 @@ def create_app(config: Config) -> FastMCP:
         reason: str = "",
     ) -> str:
         """Update a task's status (accepted, in_progress, completed, failed, rejected)."""
-        _ensure_session_agent()  # Ensure introduced
+        _get_session_agent()  # Ensure introduced
         artifacts = None
         if summary:
             artifacts = [{"text": summary}]
@@ -308,7 +272,7 @@ def create_app(config: Config) -> FastMCP:
         conversation_id: str = "",
     ) -> str:
         """Send a message to an agent, channel, or existing conversation."""
-        agent_id = _ensure_session_agent()
+        agent_id = _get_session_agent()
         return handlers.handle_send(
             from_agent_id=agent_id,
             to=to or None,
@@ -325,13 +289,13 @@ def create_app(config: Config) -> FastMCP:
     @mcp.tool()
     async def bifrost_subscribe(target: str) -> str:
         """Subscribe to a channel or task for notifications."""
-        agent_id = _ensure_session_agent()
+        agent_id = _get_session_agent()
         return handlers.handle_subscribe(agent_id=agent_id, target=target)
 
     @mcp.tool()
     async def bifrost_check() -> str:
         """Check for pending messages and events."""
-        agent_id = _ensure_session_agent()
+        agent_id = _get_session_agent()
         return handlers.handle_check(agent_id=agent_id)
 
     return mcp
