@@ -354,7 +354,7 @@ def create_app(
         token_verifier = DexTokenVerifier(oidc_config.issuer)
 
         # Determine the resource server URL for RFC 9728 metadata
-        server_url = oidc_config.server_url or "https://bifrost-spike.blegal.dev"
+        server_url = oidc_config.server_url or "https://bifrost.blegal.dev"
         resource_url = AnyHttpUrl(f"{server_url}/mcp/")
         issuer_url = AnyHttpUrl(oidc_config.issuer)
 

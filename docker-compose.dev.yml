@@ -5,29 +5,29 @@
 #
 # Required .env:
 #   OIDC_ISSUER=https://auth.blegal.dev/dex
-#   OIDC_CLIENT_ID=bifrost-spike
-#   OIDC_CLIENT_SECRET=<secret from Dex staticClient config>
-#   SERVER_URL=https://bifrost-spike.blegal.dev
+#   OIDC_CLIENT_ID=bifrost
+#   OIDC_CLIENT_SECRET=<DEX_BIFROST_SECRET from Portainer env>
+#   SERVER_URL=https://bifrost.blegal.dev
 
 services:
-  bifrost-spike:
+  bifrost:
     labels:
-      # Base router: all traffic to bifrost-spike.blegal.dev
+      # Base router: all traffic to bifrost.blegal.dev
       - "traefik.enable=true"
       - "traefik.docker.network=proxy"
 
       # MCP endpoint — NO Traefik auth middleware (MCP handles its own OAuth)
-      - "traefik.http.routers.bifrost-spike-mcp.rule=Host(`bifrost-spike.blegal.dev`) && (PathPrefix(`/mcp`) || PathPrefix(`/.well-known/oauth-protected-resource`))"
-      - "traefik.http.routers.bifrost-spike-mcp.entrypoints=web"
+      - "traefik.http.routers.bifrost-mcp.rule=Host(`bifrost.blegal.dev`) && (PathPrefix(`/mcp`) || PathPrefix(`/.well-known/oauth-protected-resource`))"
+      - "traefik.http.routers.bifrost-mcp.entrypoints=web"
 
       # Health endpoint — no auth needed
-      - "traefik.http.routers.bifrost-spike-health.rule=Host(`bifrost-spike.blegal.dev`) && PathPrefix(`/health`)"
-      - "traefik.http.routers.bifrost-spike-health.entrypoints=web"
+      - "traefik.http.routers.bifrost-health.rule=Host(`bifrost.blegal.dev`) && PathPrefix(`/health`)"
+      - "traefik.http.routers.bifrost-health.entrypoints=web"
 
       # Dashboard routes — protected by Traefik forward-auth (cookie-based SSO)
-      - "traefik.http.routers.bifrost-spike-dashboard.rule=Host(`bifrost-spike.blegal.dev`) && !PathPrefix(`/mcp`) && !PathPrefix(`/health`) && !PathPrefix(`/.well-known`)"
-      - "traefik.http.routers.bifrost-spike-dashboard.entrypoints=web"
-      - "traefik.http.routers.bifrost-spike-dashboard.middlewares=auth-all@docker"
+      - "traefik.http.routers.bifrost-dashboard.rule=Host(`bifrost.blegal.dev`) && !PathPrefix(`/mcp`) && !PathPrefix(`/health`) && !PathPrefix(`/.well-known`)"
+      - "traefik.http.routers.bifrost-dashboard.entrypoints=web"
+      - "traefik.http.routers.bifrost-dashboard.middlewares=auth-all@docker"
     networks:
       - proxy
     # Remove host port mapping — Traefik handles routing
