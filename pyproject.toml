@@ -21,6 +21,9 @@ dev = [
     "asgi-lifespan>=2.1.0",
 ]
 
+[project.scripts]
+bifrost = "bifrost.__main__:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
