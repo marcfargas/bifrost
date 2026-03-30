@@ -1,125 +1,83 @@
 """
-Spike 3: OAuth for CLI MCP Clients
-====================================
-
-GOAL: Test whether we can protect an MCP endpoint with OAuth (via Dex OIDC)
-and have Claude Code authenticate against it.
+Spike 3 v2: Bifrost as OAuth Authorization Server (proxying to Dex)
+=====================================================================
 
 ARCHITECTURE:
-    Two auth surfaces:
-    1. Dashboard (/dashboard, /agents, etc.) — protected by Traefik forward-auth
-       middleware (auth-all@docker). Zero app code needed.
-    2. MCP endpoint (/mcp/) — protected by bearer token validation. The MCP SDK
-       provides middleware for this.
+    Bifrost is BOTH the OAuth Authorization Server (AS) and Resource Server (RS)
+    from Claude Code's perspective. Under the hood, bifrost delegates user
+    authentication to Dex via OIDC.
 
-    For the MCP endpoint, we operate as an OAuth Resource Server (RS):
-    - Dex is the Authorization Server (AS) — it issues tokens
-    - Bifrost validates tokens by checking Dex's userinfo endpoint
-    - The MCP SDK's auth system provides:
-      * `TokenVerifier` protocol — we implement this to validate tokens against Dex
-      * `BearerAuthBackend` — Starlette AuthenticationMiddleware that extracts Bearer tokens
-      * `RequireAuthMiddleware` — ASGI middleware that rejects unauthenticated requests
-      * `AuthContextMiddleware` — stores the authenticated user in a contextvar
-      * `get_access_token()` — retrieves the token from contextvar in tool handlers
-      * Protected Resource Metadata (RFC 9728) — tells clients where the AS lives
+    Flow:
+    1. Claude Code → POST /mcp → 401 with resource_metadata URL
+    2. Claude Code → GET /.well-known/oauth-protected-resource → {authorization_servers: [bifrost]}
+    3. Claude Code → GET /.well-known/oauth-authorization-server → {authorize, token, register}
+    4. Claude Code → POST /register (Dynamic Client Registration RFC 7591)
+    5. Claude Code → GET /authorize?... → bifrost redirects to Dex
+    6. Dex callback → bifrost exchanges Dex code for Dex token, issues its own auth code
+    7. Claude Code → POST /token (exchanges auth code for bifrost-issued access token)
+    8. Claude Code → Bearer token to /mcp → bifrost validates its own token
 
-    The MCP SDK also supports a full OAuth AS mode (OAuthAuthorizationServerProvider)
-    where the MCP server implements /authorize, /token, /register endpoints. This is
-    used when the MCP server proxies OAuth or IS the OAuth server. We do NOT use this
-    mode — Dex is the AS, and we just validate its tokens.
+    Why this approach:
+    The previous spike pointed authorization_servers to Dex directly, but Claude
+    Code's MCP client expects RFC 8414 metadata at the AS URL, which Dex doesn't
+    support. By acting as our own AS, bifrost publishes proper metadata and proxies
+    authentication to Dex.
 
-FINDINGS (updated after implementation):
+    The MCP Python SDK provides OAuthAuthorizationServerProvider — a protocol that
+    handles dynamic client registration (RFC 7591), authorization, token exchange,
+    and token verification. The SDK's create_auth_routes() wires this into Starlette
+    routes at /authorize, /token, /register, and /.well-known/oauth-authorization-server.
 
-1. MCP SDK Auth Integration: The SDK's FastMCP.streamable_http_app() method shows
-   the wiring pattern clearly:
-   - Starlette AuthenticationMiddleware with BearerAuthBackend (extracts Bearer token)
-   - AuthContextMiddleware (stores authenticated user in contextvar)
-   - RequireAuthMiddleware wraps the StreamableHTTP ASGI app (rejects if no auth)
-   - Protected Resource Metadata endpoint at /.well-known/oauth-protected-resource
-     tells clients which AS to use (RFC 9728)
+FINDINGS:
+    1. SDK Auth Routes: The SDK creates routes at root-level paths (/authorize, /token,
+       /register), NOT under /oauth/. The metadata is at /.well-known/oauth-authorization-server.
 
-2. Token Verification against Dex: We implement TokenVerifier by calling Dex's
-   userinfo endpoint with the bearer token. If Dex returns user info, the token is
-   valid. We map the response to an AccessToken with client_id=sub, scopes from the
-   token's scope claim. This avoids needing to validate JWTs locally (no JWKS fetching,
-   no signature verification). Trade-off: one extra HTTP call per request, but simpler
-   and works regardless of Dex's token format.
+    2. Provider.authorize(): Returns a URL to redirect to. We redirect to Dex's auth
+       endpoint, storing the original AuthorizationParams (state, code_challenge,
+       redirect_uri) keyed by a random nonce so we can recover them in the callback.
 
-3. Claude Code OAuth Support: CRITICAL QUESTION. As of March 2026, Claude Code's
-   MCP client supports `type: url` servers. The MCP spec defines:
-   - Server publishes /.well-known/oauth-protected-resource (RFC 9728)
-   - Client discovers the AS from that metadata
-   - Client does OAuth with the AS directly (PKCE flow)
-   - Client sends bearer token to the MCP server
+    3. Callback route: The SDK does NOT provide a callback route — we must add one via
+       FastMCP.custom_route(). The callback at /callback handles:
+       a) Exchange Dex auth code for Dex ID token (validates user identity)
+       b) Generate our own authorization code
+       c) Redirect back to Claude Code's redirect_uri with our code + state
 
-   For this to work with Dex:
-   a) We publish protected resource metadata pointing to Dex as the AS
-   b) Claude Code must support RFC 9728 discovery + external AS flows
-   c) Dex must support dynamic client registration OR we pre-register Claude Code
-   d) Claude Code must handle the browser-based OAuth redirect
+    4. Token verification: We store issued access tokens in memory and verify them
+       via load_access_token(). No external calls needed — we issued the tokens.
 
-   NEEDS MANUAL TESTING: Deploy this spike and configure Claude Code with:
-   ```json
-   {
-     "mcpServers": {
-       "bifrost-spike": {
-         "type": "url",
-         "url": "https://bifrost-spike.blegal.dev/mcp/"
-       }
-     }
-   }
-   ```
-
-4. Insecure Fallback: When OIDC_ISSUER is not set, the server runs without auth.
-   This makes local development easy and lets us test the MCP tools without OAuth.
-
-5. Auth Context in Tools: The MCP SDK provides get_access_token() to retrieve the
-   authenticated user's token from a contextvar. This works inside tool handlers
-   because AuthContextMiddleware sets the contextvar before the request reaches
-   the MCP transport.
+    5. Dex redirect_uri: Must be https://bifrost.blegal.dev/callback (already registered).
 """
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import os
-from collections.abc import AsyncIterator
+import secrets
+import time
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from mcp.server.auth.middleware.auth_context import get_access_token
+from mcp.server.auth.provider import (
+    AccessToken,
+    AuthorizationCode,
+    AuthorizationParams,
+    OAuthAuthorizationServerProvider,
+    RefreshToken,
+    construct_redirect_uri,
+)
+from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
+from mcp.server.fastmcp import FastMCP
+from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from pydantic import AnyHttpUrl
-from starlette.middleware import Middleware
-from starlette.middleware.authentication import AuthenticationMiddleware
-from starlette.routing import Mount, Route
-from starlette.types import Receive, Scope, Send
-
-import mcp.types as types
-from mcp.server.auth.middleware.auth_context import (
-    AuthContextMiddleware,
-    get_access_token,
-)
-from mcp.server.auth.middleware.bearer_auth import (
-    BearerAuthBackend,
-    RequireAuthMiddleware,
-)
-from mcp.server.auth.provider import AccessToken, TokenVerifier
-from mcp.server.auth.routes import (
-    build_resource_metadata_url,
-    create_protected_resource_routes,
-)
-from mcp.server.auth.settings import AuthSettings
-from mcp.server.lowlevel.server import NotificationOptions, Server
-from mcp.server.models import InitializationOptions
-from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+from starlette.requests import Request
+from starlette.responses import JSONResponse, RedirectResponse, Response
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Configuration from environment
+# Configuration
 # ---------------------------------------------------------------------------
 
 
@@ -134,285 +92,399 @@ class OIDCConfig:
 
     @property
     def is_configured(self) -> bool:
-        return bool(self.issuer and self.client_id)
+        return bool(self.issuer and self.client_id and self.client_secret)
 
 
 # ---------------------------------------------------------------------------
-# Dex Token Verifier
+# Dex-backed OAuth Authorization Server Provider
 # ---------------------------------------------------------------------------
 
 
-class DexTokenVerifier:
-    """Verify bearer tokens by calling Dex's userinfo endpoint.
+class DexOAuthProvider:
+    """OAuthAuthorizationServerProvider that delegates authentication to Dex.
 
-    Instead of validating JWTs locally (which requires JWKS fetching and
-    signature verification), we delegate to Dex's userinfo endpoint. If the
-    token is valid, Dex returns user info; if not, it returns 401.
-
-    This is simpler and works regardless of Dex's token format (opaque or JWT).
-    The trade-off is one extra HTTP call per MCP request, which is acceptable
-    for a spike. In production, we'd cache tokens or validate JWTs locally.
+    Implements the full provider protocol:
+    - Dynamic client registration: stores clients in memory
+    - Authorization: redirects to Dex, stores pending state
+    - Token exchange: issues our own tokens after Dex callback
+    - Token verification: validates our own tokens from memory
     """
 
-    def __init__(self, issuer_url: str) -> None:
-        self._userinfo_url = issuer_url.rstrip("/") + "/userinfo"
-        self._client: httpx.AsyncClient | None = None
+    def __init__(self, oidc_config: OIDCConfig) -> None:
+        self._oidc = oidc_config
+        # Dex endpoints (derived from OIDC issuer)
+        issuer = oidc_config.issuer.rstrip("/")
+        self._dex_auth_url = f"{issuer}/auth"
+        self._dex_token_url = f"{issuer}/token"
+        self._dex_userinfo_url = f"{issuer}/userinfo"
 
-    async def _get_client(self) -> httpx.AsyncClient:
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=10.0)
-        return self._client
+        # The callback URL where Dex redirects back to us
+        server_url = oidc_config.server_url.rstrip("/")
+        self._callback_url = f"{server_url}/callback"
 
-    async def verify_token(self, token: str) -> AccessToken | None:
-        """Verify a bearer token against Dex's userinfo endpoint."""
-        try:
-            client = await self._get_client()
-            resp = await client.get(
-                self._userinfo_url,
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            if resp.status_code != 200:
-                logger.debug("Token verification failed: %s", resp.status_code)
-                return None
+        # In-memory stores
+        self._clients: dict[str, OAuthClientInformationFull] = {}
+        self._auth_codes: dict[str, AuthorizationCode] = {}
+        self._access_tokens: dict[str, AccessToken] = {}
+        self._refresh_tokens: dict[str, RefreshToken] = {}
 
-            user_info = resp.json()
-            # Dex userinfo returns: sub, name, email, email_verified, groups, etc.
-            return AccessToken(
-                token=token,
-                client_id=user_info.get("sub", "unknown"),
-                scopes=user_info.get("groups", []),
-            )
-        except Exception:
-            logger.exception("Token verification error")
-            return None
+        # Pending authorization flows: nonce -> AuthorizationParams + client_id
+        # Stored when we redirect to Dex, consumed when Dex calls back
+        self._pending_auth: dict[str, dict[str, Any]] = {}
+
+        self._http_client: httpx.AsyncClient | None = None
+
+    async def _get_http_client(self) -> httpx.AsyncClient:
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.AsyncClient(timeout=10.0)
+        return self._http_client
 
     async def close(self) -> None:
-        if self._client and not self._client.is_closed:
-            await self._client.aclose()
+        if self._http_client and not self._http_client.is_closed:
+            await self._http_client.aclose()
 
+    # -- Client Registration (RFC 7591) ------------------------------------
 
-# ---------------------------------------------------------------------------
-# MCP Server setup
-# ---------------------------------------------------------------------------
+    async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
+        return self._clients.get(client_id)
 
+    async def register_client(self, client_info: OAuthClientInformationFull) -> None:
+        # The SDK's RegistrationHandler generates client_id/secret before calling
+        # this method, so we just store what we're given.
+        if client_info.client_id is None:
+            client_info.client_id = secrets.token_hex(16)
+        self._clients[client_info.client_id] = client_info
 
-def _create_mcp_server() -> Server:
-    """Create and configure the low-level MCP server with tools."""
-    server = Server(name="bifrost-spike-oauth", version="0.1.0")
+    # -- Authorization -----------------------------------------------------
 
-    # Monkey-patch create_initialization_options (same pattern as spike_mcp.py)
-    _original = server.create_initialization_options
+    async def authorize(
+        self, client: OAuthClientInformationFull, params: AuthorizationParams
+    ) -> str:
+        """Redirect to Dex for authentication.
 
-    def _patched(
-        notification_options: NotificationOptions | None = None,
-        experimental_capabilities: dict[str, dict[str, Any]] | None = None,
-    ) -> InitializationOptions:
-        merged = experimental_capabilities or {}
-        merged.setdefault("claude/channel", {})
-        return _original(
-            notification_options=notification_options,
-            experimental_capabilities=merged,
+        We generate a nonce to link this authorization request to the Dex
+        callback. The nonce is passed as Dex's `state` parameter. When Dex
+        calls back, we look up the original params by nonce.
+        """
+        nonce = secrets.token_urlsafe(32)
+
+        # Store the original auth params so the callback can create our auth code
+        self._pending_auth[nonce] = {
+            "client_id": client.client_id,
+            "params": params,
+            "created_at": time.time(),
+        }
+
+        # Build Dex authorization URL
+        dex_params = {
+            "client_id": self._oidc.client_id,
+            "redirect_uri": self._callback_url,
+            "response_type": "code",
+            "scope": "openid email profile groups",
+            "state": nonce,
+        }
+
+        dex_url = construct_redirect_uri(self._dex_auth_url, **dex_params)
+        return dex_url
+
+    # -- Authorization Code Management -------------------------------------
+
+    async def load_authorization_code(
+        self, client: OAuthClientInformationFull, authorization_code: str
+    ) -> AuthorizationCode | None:
+        code = self._auth_codes.get(authorization_code)
+        if code and code.client_id == client.client_id:
+            return code
+        return None
+
+    async def exchange_authorization_code(
+        self, client: OAuthClientInformationFull, authorization_code: AuthorizationCode
+    ) -> OAuthToken:
+        """Exchange our authorization code for tokens we issue."""
+        # Remove the auth code (single use)
+        self._auth_codes.pop(authorization_code.code, None)
+
+        # Generate access token
+        access_token_str = secrets.token_urlsafe(32)
+        access_token = AccessToken(
+            token=access_token_str,
+            client_id=authorization_code.client_id,
+            scopes=authorization_code.scopes,
+            expires_at=int(time.time()) + 3600,  # 1 hour
+            resource=authorization_code.resource,
+        )
+        self._access_tokens[access_token_str] = access_token
+
+        # Generate refresh token
+        refresh_token_str = secrets.token_urlsafe(32)
+        refresh_token = RefreshToken(
+            token=refresh_token_str,
+            client_id=authorization_code.client_id,
+            scopes=authorization_code.scopes,
+            expires_at=int(time.time()) + 86400 * 7,  # 7 days
+        )
+        self._refresh_tokens[refresh_token_str] = refresh_token
+
+        return OAuthToken(
+            access_token=access_token_str,
+            token_type="Bearer",
+            expires_in=3600,
+            scope=" ".join(authorization_code.scopes),
+            refresh_token=refresh_token_str,
         )
 
-    server.create_initialization_options = _patched  # type: ignore[assignment]
+    # -- Refresh Token Management ------------------------------------------
 
-    # -- Tool handlers --------------------------------------------------------
+    async def load_refresh_token(
+        self, client: OAuthClientInformationFull, refresh_token: str
+    ) -> RefreshToken | None:
+        token = self._refresh_tokens.get(refresh_token)
+        if token and token.client_id == client.client_id:
+            return token
+        return None
 
-    @server.list_tools()
-    async def list_tools() -> list[types.Tool]:
-        return [
-            types.Tool(
-                name="whoami",
-                description="Returns the authenticated user's identity.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                },
-            ),
-            types.Tool(
-                name="echo",
-                description="Returns the input message unchanged.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "message": {
-                            "type": "string",
-                            "description": "Message to echo back",
-                        },
-                    },
-                    "required": ["message"],
-                },
-            ),
-        ]
+    async def exchange_refresh_token(
+        self,
+        client: OAuthClientInformationFull,
+        refresh_token: RefreshToken,
+        scopes: list[str],
+    ) -> OAuthToken:
+        """Rotate tokens on refresh."""
+        # Remove old refresh token
+        self._refresh_tokens.pop(refresh_token.token, None)
 
-    @server.call_tool()
-    async def call_tool(
-        name: str, arguments: dict[str, Any] | None
-    ) -> list[types.TextContent]:
-        match name:
-            case "whoami":
-                access_token = get_access_token()
-                if access_token:
-                    return [
-                        types.TextContent(
-                            type="text",
-                            text=(
-                                f"Authenticated as: {access_token.client_id}\n"
-                                f"Scopes: {', '.join(access_token.scopes) or 'none'}"
-                            ),
-                        )
-                    ]
-                return [
-                    types.TextContent(
-                        type="text",
-                        text="Not authenticated (auth not configured or no token)",
-                    )
-                ]
+        # Generate new access token
+        access_token_str = secrets.token_urlsafe(32)
+        access_token = AccessToken(
+            token=access_token_str,
+            client_id=refresh_token.client_id,
+            scopes=scopes,
+            expires_at=int(time.time()) + 3600,
+        )
+        self._access_tokens[access_token_str] = access_token
 
-            case "echo":
-                msg = (arguments or {}).get("message", "")
-                return [types.TextContent(type="text", text=msg)]
+        # Generate new refresh token
+        new_refresh_str = secrets.token_urlsafe(32)
+        new_refresh = RefreshToken(
+            token=new_refresh_str,
+            client_id=refresh_token.client_id,
+            scopes=scopes,
+            expires_at=int(time.time()) + 86400 * 7,
+        )
+        self._refresh_tokens[new_refresh_str] = new_refresh
 
-            case _:
-                return [types.TextContent(type="text", text=f"unknown tool: {name}")]
+        return OAuthToken(
+            access_token=access_token_str,
+            token_type="Bearer",
+            expires_in=3600,
+            scope=" ".join(scopes),
+            refresh_token=new_refresh_str,
+        )
 
-    return server
+    # -- Access Token Verification -----------------------------------------
+
+    async def load_access_token(self, token: str) -> AccessToken | None:
+        access_token = self._access_tokens.get(token)
+        if access_token is None:
+            return None
+        # Check expiry
+        if access_token.expires_at and access_token.expires_at < time.time():
+            self._access_tokens.pop(token, None)
+            return None
+        return access_token
+
+    # -- Token Revocation --------------------------------------------------
+
+    async def revoke_token(
+        self, token: AccessToken | RefreshToken
+    ) -> None:
+        if isinstance(token, AccessToken):
+            self._access_tokens.pop(token.token, None)
+        elif isinstance(token, RefreshToken):
+            self._refresh_tokens.pop(token.token, None)
+
+    # -- Dex Callback Handler (called from the /callback route) ------------
+
+    async def handle_dex_callback(
+        self, code: str, state: str
+    ) -> tuple[str, str, str]:
+        """Handle the Dex OIDC callback.
+
+        Args:
+            code: The authorization code from Dex
+            state: The nonce we passed to Dex (links to pending auth)
+
+        Returns:
+            Tuple of (redirect_uri, our_auth_code, original_state)
+
+        Raises:
+            ValueError: If the state is invalid or expired
+        """
+        pending = self._pending_auth.pop(state, None)
+        if pending is None:
+            raise ValueError("Invalid or expired authorization state")
+
+        # Check if the pending auth is too old (10 minutes)
+        if time.time() - pending["created_at"] > 600:
+            raise ValueError("Authorization request expired")
+
+        params: AuthorizationParams = pending["params"]
+        client_id: str = pending["client_id"]
+
+        # Exchange Dex code for Dex tokens (validates the user authenticated)
+        http = await self._get_http_client()
+        dex_resp = await http.post(
+            self._dex_token_url,
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": self._callback_url,
+                "client_id": self._oidc.client_id,
+                "client_secret": self._oidc.client_secret,
+            },
+        )
+
+        if dex_resp.status_code != 200:
+            logger.error("Dex token exchange failed: %s %s", dex_resp.status_code, dex_resp.text)
+            raise ValueError(f"Dex token exchange failed: {dex_resp.status_code}")
+
+        # We don't need to parse the Dex tokens in detail — the fact that
+        # Dex accepted the code proves the user authenticated successfully.
+        # In production, we'd verify the ID token and extract user claims.
+
+        # Generate our own authorization code
+        our_code = secrets.token_urlsafe(32)
+        auth_code = AuthorizationCode(
+            code=our_code,
+            scopes=params.scopes or [],
+            expires_at=time.time() + 300,  # 5 minutes
+            client_id=client_id,
+            code_challenge=params.code_challenge,
+            redirect_uri=params.redirect_uri,
+            redirect_uri_provided_explicitly=params.redirect_uri_provided_explicitly,
+            resource=params.resource,
+        )
+        self._auth_codes[our_code] = auth_code
+
+        return str(params.redirect_uri), our_code, params.state or ""
 
 
 # ---------------------------------------------------------------------------
-# ASGI wrapper for the session manager
-# ---------------------------------------------------------------------------
-
-
-class _MCPTransport:
-    """ASGI app that delegates to StreamableHTTPSessionManager.handle_request."""
-
-    def __init__(self, session_manager: StreamableHTTPSessionManager) -> None:
-        self._sm = session_manager
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        await self._sm.handle_request(scope, receive, send)
-
-
-# ---------------------------------------------------------------------------
-# App factory
+# App Factory
 # ---------------------------------------------------------------------------
 
 
 def create_app(
     oidc_config: OIDCConfig | None = None,
-) -> tuple[FastAPI, StreamableHTTPSessionManager, DexTokenVerifier | None]:
-    """Create a FastAPI app with optional OAuth protection on the MCP endpoint.
+    **extra_kwargs: Any,
+) -> tuple[FastMCP, DexOAuthProvider | None]:
+    """Create a FastMCP app with OAuth AS backed by Dex.
 
-    Returns (app, session_manager, token_verifier).
+    Args:
+        oidc_config: OIDC configuration (defaults to env vars)
+        **extra_kwargs: Passed through to FastMCP constructor (e.g. transport_security)
+
+    Returns (mcp_server, oauth_provider).
     """
     if oidc_config is None:
         oidc_config = OIDCConfig()
 
-    mcp_server = _create_mcp_server()
-
-    sm = StreamableHTTPSessionManager(
-        app=mcp_server,
-        json_response=False,
-        stateless=False,
-    )
-
-    token_verifier: DexTokenVerifier | None = None
-
-    @contextlib.asynccontextmanager
-    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        async with sm.run():
-            try:
-                yield
-            finally:
-                if token_verifier:
-                    await token_verifier.close()
-
-    fastapi_app = FastAPI(title="Bifrost Spike (OAuth)", lifespan=lifespan)
-
-    # -- Health endpoint (always unauthenticated) -----------------------------
-
-    @fastapi_app.get("/health")
-    async def health():
-        return JSONResponse(
-            {
-                "status": "ok",
-                "auth_enabled": oidc_config.is_configured,
-            }
-        )
-
-    # -- MCP endpoint with optional OAuth protection --------------------------
-
-    mcp_asgi = _MCPTransport(sm)
+    provider: DexOAuthProvider | None = None
 
     if oidc_config.is_configured:
-        logger.info(
-            "OAuth enabled: issuer=%s, client_id=%s",
-            oidc_config.issuer,
-            oidc_config.client_id,
-        )
-        token_verifier = DexTokenVerifier(oidc_config.issuer)
-
-        # Determine the resource server URL for RFC 9728 metadata
         server_url = oidc_config.server_url or "https://bifrost.blegal.dev"
-        resource_url = AnyHttpUrl(f"{server_url}/mcp/")
-        issuer_url = AnyHttpUrl(oidc_config.issuer)
 
-        # Build the Starlette middleware stack:
-        # 1. AuthenticationMiddleware — extracts Bearer token, runs BearerAuthBackend
-        # 2. AuthContextMiddleware — stores AuthenticatedUser in contextvar
-        middleware = [
-            Middleware(
-                AuthenticationMiddleware,
-                backend=BearerAuthBackend(token_verifier),
+        provider = DexOAuthProvider(oidc_config)
+
+        mcp = FastMCP(
+            name="bifrost-spike-oauth",
+            auth_server_provider=provider,
+            auth=AuthSettings(
+                # issuer_url = bifrost itself (we ARE the AS)
+                issuer_url=AnyHttpUrl(server_url),
+                # resource_server_url = the MCP endpoint
+                resource_server_url=AnyHttpUrl(f"{server_url}/mcp"),
+                client_registration_options=ClientRegistrationOptions(
+                    enabled=True,
+                    valid_scopes=["openid", "email", "profile"],
+                    default_scopes=["openid"],
+                ),
+                revocation_options=RevocationOptions(enabled=True),
+                required_scopes=[],
             ),
-            Middleware(AuthContextMiddleware),
-        ]
-
-        # Build the resource metadata URL for WWW-Authenticate header
-        resource_metadata_url = build_resource_metadata_url(resource_url)
-
-        # Wrap the MCP ASGI app with RequireAuthMiddleware
-        auth_protected_mcp = RequireAuthMiddleware(
-            app=mcp_asgi,
-            required_scopes=[],  # No specific scopes required for now
-            resource_metadata_url=resource_metadata_url,
+            stateless_http=False,
+            streamable_http_path="/mcp",
+            **extra_kwargs,
         )
 
-        # Protected Resource Metadata (RFC 9728) — tells clients where the AS lives
-        # Mount at FastAPI root level so it's accessible at
-        # /.well-known/oauth-protected-resource (not nested under /mcp)
-        resource_routes = create_protected_resource_routes(
-            resource_url=resource_url,
-            authorization_servers=[issuer_url],
-            scopes_supported=[],
-            resource_name="Bifrost MCP Server",
-        )
+        # -- Dex callback route (receives redirect from Dex after user login) --
+        @mcp.custom_route("/callback", methods=["GET"])
+        async def dex_callback(request: Request) -> Response:
+            """Handle the Dex OIDC callback."""
+            code = request.query_params.get("code")
+            state = request.query_params.get("state")
 
-        from starlette.applications import Starlette
+            if not code or not state:
+                return JSONResponse(
+                    {"error": "Missing code or state parameter"},
+                    status_code=400,
+                )
 
-        # Mount .well-known routes at root level (not under /mcp).
-        # The SDK generates route at /.well-known/oauth-protected-resource/mcp/
-        # which needs to be accessible from the root, not nested under /mcp.
-        for route in resource_routes:
-            fastapi_app.routes.insert(0, route)
+            try:
+                redirect_uri, our_code, original_state = (
+                    await provider.handle_dex_callback(code, state)
+                )
+            except ValueError as e:
+                return JSONResponse(
+                    {"error": str(e)},
+                    status_code=400,
+                )
 
-        # Mount the protected MCP endpoint with auth middleware
-        mcp_starlette = Starlette(
-            routes=[
-                Route("/", endpoint=auth_protected_mcp),
-            ],
-            middleware=middleware,
-        )
-
-        fastapi_app.mount("/mcp", app=mcp_starlette)
+            # Redirect back to Claude Code's redirect_uri with our auth code
+            params: dict[str, str | None] = {"code": our_code}
+            if original_state:
+                params["state"] = original_state
+            target = construct_redirect_uri(redirect_uri, **params)
+            return RedirectResponse(url=target, status_code=302)
 
     else:
-        logger.info("OAuth disabled: OIDC_ISSUER not configured, running in insecure mode")
-        fastapi_app.mount("/mcp", app=mcp_asgi)
+        logger.info("OAuth disabled: OIDC not configured, running without auth")
+        mcp = FastMCP(
+            name="bifrost-spike-oauth",
+            stateless_http=False,
+            streamable_http_path="/mcp",
+            **extra_kwargs,
+        )
 
-    return fastapi_app, sm, token_verifier
+    # -- Health endpoint (always available, no auth) -----------------------
+    @mcp.custom_route("/health", methods=["GET"])
+    async def health(request: Request) -> Response:
+        return JSONResponse({
+            "status": "ok",
+            "auth_enabled": oidc_config.is_configured,
+        })
+
+    # -- MCP Tools ---------------------------------------------------------
+
+    @mcp.tool()
+    async def whoami() -> str:
+        """Returns the authenticated user's identity."""
+        access_token = get_access_token()
+        if access_token:
+            return (
+                f"Authenticated as: {access_token.client_id}\n"
+                f"Scopes: {', '.join(access_token.scopes) or 'none'}"
+            )
+        return "Not authenticated (auth not configured or no token)"
+
+    @mcp.tool()
+    async def echo(message: str) -> str:
+        """Returns the input message unchanged."""
+        return message
+
+    return mcp, provider
 
 
 # Module-level app for `uvicorn bifrost.spike_oauth:app`
-app, session_manager, _verifier = create_app()
+_mcp, _provider = create_app()
+app = _mcp.streamable_http_app()

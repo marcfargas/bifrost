@@ -16,8 +16,9 @@ services:
       - "traefik.enable=true"
       - "traefik.docker.network=proxy"
 
-      # MCP endpoint — NO Traefik auth middleware (MCP handles its own OAuth)
-      - "traefik.http.routers.bifrost-mcp.rule=Host(`bifrost.blegal.dev`) && (PathPrefix(`/mcp`) || PathPrefix(`/.well-known/oauth-protected-resource`))"
+      # OAuth + MCP endpoints — NO Traefik auth middleware (bifrost handles its own OAuth)
+      # Includes: /mcp, /.well-known/*, /authorize, /token, /register, /revoke, /callback
+      - "traefik.http.routers.bifrost-mcp.rule=Host(`bifrost.blegal.dev`) && (PathPrefix(`/mcp`) || PathPrefix(`/.well-known`) || PathPrefix(`/authorize`) || PathPrefix(`/token`) || PathPrefix(`/register`) || PathPrefix(`/revoke`) || PathPrefix(`/callback`))"
       - "traefik.http.routers.bifrost-mcp.entrypoints=web"
 
       # Health endpoint — no auth needed
@@ -25,7 +26,7 @@ services:
       - "traefik.http.routers.bifrost-health.entrypoints=web"
 
       # Dashboard routes — protected by Traefik forward-auth (cookie-based SSO)
-      - "traefik.http.routers.bifrost-dashboard.rule=Host(`bifrost.blegal.dev`) && !PathPrefix(`/mcp`) && !PathPrefix(`/health`) && !PathPrefix(`/.well-known`)"
+      - "traefik.http.routers.bifrost-dashboard.rule=Host(`bifrost.blegal.dev`) && !PathPrefix(`/mcp`) && !PathPrefix(`/health`) && !PathPrefix(`/.well-known`) && !PathPrefix(`/authorize`) && !PathPrefix(`/token`) && !PathPrefix(`/register`) && !PathPrefix(`/revoke`) && !PathPrefix(`/callback`)"
       - "traefik.http.routers.bifrost-dashboard.entrypoints=web"
       - "traefik.http.routers.bifrost-dashboard.middlewares=auth-all@docker"
     networks:
