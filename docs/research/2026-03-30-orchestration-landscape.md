@@ -39,6 +39,33 @@ Research conducted during a blegal-dev infrastructure planning session. This cap
 - **What it is:** Workspace/tmux automation. Agents can split panes programmatically.
 - **Why rejected:** Infrastructure layer only.
 
+### Ruflo (ruvnet/ruflo) — 28k stars
+- **What it is:** Enterprise AI orchestration platform for Claude Code. 100+ specialized agents, swarm coordination (mesh/hierarchical/ring/star), consensus protocols (Raft, BFT, Gossip, CRDT), self-learning (SONA, RL, vector memory), multi-provider (Claude/GPT/Gemini/Ollama), smart model routing (WASM for simple, Haiku for medium, Opus for complex), 310+ MCP tools, plugin system.
+- **Key strengths:**
+  - **Single primary session orchestrates everything** — hierarchical topology with lead session coordinating agents. Built-in Mayor pattern.
+  - **Remote MCP server** — can run as MCP server that multiple Claude Code sessions connect to. WebSocket support.
+  - **Multi-project** — one instance manages agents across repos via tmux session naming with directory hashes.
+  - **Solo dev workflow documented** — self-coordination pattern, not just enterprise.
+  - **Smart routing** — Q-Learning router picks models by task complexity, extends Claude subscription by ~250%.
+  - **Session persistence** — context survives across conversations.
+  - **Background daemons** — auto-runs audits, optimization, learning.
+- **Web dashboard:** Not built-in. **OctoAlly** (github.com/ai-genius-automations/octoally) is a third-party web dashboard for Ruflo: live session grid, hive-mind orchestration view, streaming output, session persistence, git diffs, pop-out terminals.
+- **Gaps:** Massive complexity (310 MCP tools, WASM kernels, RL algorithms). No A2A protocol. No built-in web UI. Potentially overengineered for small-scale use, but the most flexible option by far.
+- **Assessment:** Most capable orchestrator evaluated. The primary-session model + remote MCP + multi-project support is exactly the architecture we need. The question is whether the complexity overhead is worth it vs. lighter alternatives.
+
+### oh-my-claudecode (Yeachan-Heo/oh-my-claudecode) — 17k stars
+- **What it is:** Claude Code plugin adding multi-agent orchestration. Zero new infrastructure.
+- **Key strengths:**
+  - **Team mode** — staged pipeline: plan → PRD → execute → verify → fix loop. Uses Claude Code native Agent Teams.
+  - **Multi-provider workers** — spawns Claude, Codex, Gemini CLI workers as tmux panes.
+  - **32 specialized agents** with smart model routing (Haiku simple, Opus complex).
+  - **HUD statusline** — real-time orchestration visibility in terminal.
+  - **Skills system** — auto-extracted reusable patterns, auto-injected when relevant.
+  - **Notifications** — Telegram, Discord, Slack callbacks on session completion.
+  - **Zero install friction** — Claude Code plugin marketplace or npx.
+- **Gaps:** No web dashboard (terminal/HUD only). No A2A. No cross-machine. No persistent task board across sessions.
+- **Assessment:** Closest to "just works" for adding orchestration to existing Claude Code workflow. No new services to deploy. But limited to terminal visibility and same-machine coordination.
+
 ### Conductor (Melty Labs)
 - macOS only. Visual dashboard + worktree isolation for 3-8 parallel agents.
 
