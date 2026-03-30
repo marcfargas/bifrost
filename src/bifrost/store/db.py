@@ -128,6 +128,7 @@ class Store:
 
     def __init__(self, path: str | Path) -> None:
         self._path = str(path)
+        Path(self._path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self._path)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")

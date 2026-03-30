@@ -13,7 +13,7 @@ def main() -> None:
     )
     parser.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8000, help="Bind port (default: 8000)")
-    parser.add_argument("--db", default="bifrost.db", help="SQLite database path (default: bifrost.db)")
+    parser.add_argument("--db", default="data/bifrost.db", help="SQLite database path (default: data/bifrost.db)")
     parser.add_argument("--insecure", action="store_true", help="Run without authentication")
     parser.add_argument(
         "--oidc-issuer",
