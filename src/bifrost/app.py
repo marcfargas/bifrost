@@ -103,6 +103,32 @@ def create_app(config: Config) -> FastMCP:
     mcp = FastMCP(**mcp_kwargs)
 
     # ------------------------------------------------------------------
+    # Auto-register unnamed agents on any authenticated MCP request.
+    # The list_tools handler runs on every new connection — we hook into
+    # it to ensure authenticated sessions get a placeholder agent entry.
+    # ------------------------------------------------------------------
+
+    _original_list_tools = mcp._tool_manager.list_tools
+
+    def _list_tools_with_registration():
+        """Wrapper that auto-registers the agent on list_tools (first MCP call)."""
+        from mcp.server.auth.middleware.auth_context import get_access_token
+        try:
+            access_token = get_access_token()
+            if access_token is not None:
+                session_key = _get_session_key(access_token, insecure=config.insecure)
+                if session_key not in session_agents:
+                    oauth_subject = access_token.client_id
+                    placeholder = f"unnamed ({oauth_subject[:12]})"
+                    agent = agents.register(placeholder, oauth_subject=oauth_subject)
+                    session_agents[session_key] = agent.id
+        except Exception:
+            pass  # Don't break list_tools if registration fails
+        return _original_list_tools()
+
+    mcp._tool_manager.list_tools = _list_tools_with_registration
+
+    # ------------------------------------------------------------------
     # Health endpoint
     # ------------------------------------------------------------------
 
