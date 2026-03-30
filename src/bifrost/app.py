@@ -20,6 +20,10 @@ from bifrost.store.db import Store
 
 MCP_INSTRUCTIONS = """Bifrost connects you to other agents.
 
+FIRST: Call bifrost_introduce now to tell other agents who you are,
+what you can do, and what your limitations are. This is how agents
+discover each other's capabilities.
+
 MESSAGES: Use bifrost_send to message agents or channels.
 Call bifrost_check regularly to receive messages.
 
@@ -28,48 +32,20 @@ States: queued -> running -> completed/failed/canceled/rejected.
 Use input-required when you need more info.
 
 DISCOVERY: Use bifrost_list_agents to find agents and their capabilities.
-Use bifrost_introduce to describe yourself.
-
 CHANNELS: Use bifrost_subscribe to follow topics.
 STATUS: Use bifrost_whoami to check/update your status.
 """
 
 
-def _resolve_agent_id(
-    access_token: Any,
-    agents: AgentHub,
-    *,
-    insecure: bool = False,
-    agent_name: str | None = None,
-    _session_agents: dict[str, str] | None = None,
-) -> str:
-    """Resolve the calling agent's ID.
+def _get_session_key(access_token: Any, *, insecure: bool) -> str:
+    """Get a unique key for the current MCP session.
 
-    In OAuth mode: uses access_token.client_id to find/create agent.
-    In insecure mode: uses agent_name param or auto-generates.
+    OAuth mode: uses the access_token.token (unique per session).
+    Insecure mode: uses a fixed key (single-session).
     """
     if not insecure and access_token is not None:
-        # OAuth mode: client_id is the agent identity
-        client_id = access_token.client_id
-        try:
-            agent = agents.resolve(client_id)
-            return agent.id
-        except KeyError:
-            agent = agents.register(client_id, oauth_subject=client_id)
-            return agent.id
-
-    # Insecure mode
-    if agent_name:
-        try:
-            agent = agents.resolve(agent_name)
-            return agent.id
-        except KeyError:
-            agent = agents.register(agent_name)
-            return agent.id
-
-    raise ValueError(
-        "Agent identity required. In insecure mode, provide _agent_name parameter."
-    )
+        return access_token.token
+    return "insecure"
 
 
 def create_app(config: Config) -> FastMCP:
@@ -85,8 +61,8 @@ def create_app(config: Config) -> FastMCP:
         agents=agents, tasks=tasks, conversations=conversations, delivery=delivery
     )
 
-    # Session-level agent tracking for insecure mode
-    # Maps session token -> agent_id (not used in OAuth mode)
+    # Maps session key -> agent_id. Populated by bifrost_introduce.
+    # Agent is invisible until introduced.
     session_agents: dict[str, str] = {}
 
     # Build FastMCP kwargs
@@ -151,17 +127,49 @@ def create_app(config: Config) -> FastMCP:
     # Helper to get agent_id in tool handlers
     # ------------------------------------------------------------------
 
-    def _get_agent_id(agent_name: str = "") -> str:
+    def _get_session_agent(agent_name: str = "") -> str:
+        """Get the agent_id for the current session. Raises ValueError if not introduced.
+
+        In insecure mode, agent_name can be used to identify (for backwards compat).
+        """
         from mcp.server.auth.middleware.auth_context import get_access_token
 
         access_token = get_access_token()
-        return _resolve_agent_id(
-            access_token,
-            agents,
-            insecure=config.insecure,
-            agent_name=agent_name or None,
-            _session_agents=session_agents,
+        session_key = _get_session_key(access_token, insecure=config.insecure)
+
+        # Check if this session has an introduced agent
+        if session_key in session_agents:
+            return session_agents[session_key]
+
+        # Insecure mode fallback: auto-register by agent_name
+        if config.insecure and agent_name:
+            agent = agents.resolve(agent_name)
+            if agent:
+                session_agents[session_key] = agent.id
+                return agent.id
+            agent = agents.register(agent_name)
+            session_agents[session_key] = agent.id
+            return agent.id
+
+        raise ValueError(
+            "You must call bifrost_introduce first to register your agent."
         )
+
+    def _introduce_agent(name: str, oauth_subject: str = "") -> str:
+        """Register an agent for the current session. Returns agent_id."""
+        from mcp.server.auth.middleware.auth_context import get_access_token
+
+        access_token = get_access_token()
+        session_key = _get_session_key(access_token, insecure=config.insecure)
+
+        # Derive oauth_subject from token if available
+        if not oauth_subject and access_token is not None:
+            oauth_subject = access_token.client_id
+
+        # Register or reconnect the agent
+        agent = agents.register(name, oauth_subject=oauth_subject)
+        session_agents[session_key] = agent.id
+        return agent.id
 
     # ------------------------------------------------------------------
     # Tool registration
@@ -169,19 +177,28 @@ def create_app(config: Config) -> FastMCP:
 
     @mcp.tool()
     async def bifrost_introduce(
+        name: str = "",
         introduction: str = "",
         description: str = "",
         skills: list[dict] | None = None,
         limitations: str = "",
-        agent_name: str = "",
     ) -> str:
-        """Update your agent card with a description, skills, and limitations.
+        """Register yourself with bifrost. MUST be called before any other tool.
 
-        In insecure mode, provide agent_name to identify yourself.
+        Args:
+            name: Your agent name (required). How other agents will address you.
+            introduction: Freeform self-description.
+            description: What you do (overrides introduction if both given).
+            skills: List of skill objects with name, description, tags.
+            limitations: What you cannot do.
         """
-        agent_id = _get_agent_id(agent_name)
+        if not name:
+            return "Error: name is required. Tell bifrost who you are."
+
+        agent_id = _introduce_agent(name)
         return handlers.handle_introduce(
             agent_id=agent_id,
+            name=name,
             introduction=introduction or None,
             description=description or None,
             skills=skills,
@@ -192,13 +209,9 @@ def create_app(config: Config) -> FastMCP:
     async def bifrost_whoami(
         status: str = "",
         dnd_reason: str = "",
-        agent_name: str = "",
     ) -> str:
-        """Check your identity or update your status (online, idle, dnd, offline).
-
-        In insecure mode, provide agent_name to identify yourself.
-        """
-        agent_id = _get_agent_id(agent_name)
+        """Check your identity or update your status (online, idle, dnd, offline)."""
+        agent_id = _get_session_agent()
         return handlers.handle_whoami(
             agent_id=agent_id,
             status=status or None,
@@ -215,13 +228,9 @@ def create_app(config: Config) -> FastMCP:
         assignee: str,
         title: str = "",
         description: str = "",
-        agent_name: str = "",
     ) -> str:
-        """Request another agent to perform a task.
-
-        In insecure mode, provide agent_name to identify yourself.
-        """
-        agent_id = _get_agent_id(agent_name)
+        """Request another agent to perform a task."""
+        agent_id = _get_session_agent()
         metadata: dict[str, str] = {}
         if title:
             metadata["title"] = title
@@ -239,13 +248,9 @@ def create_app(config: Config) -> FastMCP:
         status: str = "",
         summary: str = "",
         reason: str = "",
-        agent_name: str = "",
     ) -> str:
-        """Update a task's status (accepted, in_progress, completed, failed, rejected).
-
-        In insecure mode, provide agent_name to identify yourself.
-        """
-        _get_agent_id(agent_name)  # Ensure agent is registered
+        """Update a task's status (accepted, in_progress, completed, failed, rejected)."""
+        _get_session_agent()  # Ensure introduced
         artifacts = None
         if summary:
             artifacts = [{"text": summary}]
@@ -279,13 +284,9 @@ def create_app(config: Config) -> FastMCP:
         to: str = "",
         channel: str = "",
         conversation_id: str = "",
-        agent_name: str = "",
     ) -> str:
-        """Send a message to an agent, channel, or existing conversation.
-
-        In insecure mode, provide agent_name to identify yourself.
-        """
-        agent_id = _get_agent_id(agent_name)
+        """Send a message to an agent, channel, or existing conversation."""
+        agent_id = _get_session_agent()
         return handlers.handle_send(
             from_agent_id=agent_id,
             to=to or None,
@@ -300,24 +301,15 @@ def create_app(config: Config) -> FastMCP:
         return handlers.handle_list_conversations(channel=channel or None)
 
     @mcp.tool()
-    async def bifrost_subscribe(
-        target: str,
-        agent_name: str = "",
-    ) -> str:
-        """Subscribe to a channel or task for notifications.
-
-        In insecure mode, provide agent_name to identify yourself.
-        """
-        agent_id = _get_agent_id(agent_name)
+    async def bifrost_subscribe(target: str) -> str:
+        """Subscribe to a channel or task for notifications."""
+        agent_id = _get_session_agent()
         return handlers.handle_subscribe(agent_id=agent_id, target=target)
 
     @mcp.tool()
-    async def bifrost_check(agent_name: str = "") -> str:
-        """Check for pending messages and events.
-
-        In insecure mode, provide agent_name to identify yourself.
-        """
-        agent_id = _get_agent_id(agent_name)
+    async def bifrost_check() -> str:
+        """Check for pending messages and events."""
+        agent_id = _get_session_agent()
         return handlers.handle_check(agent_id=agent_id)
 
     return mcp

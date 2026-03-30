@@ -43,6 +43,18 @@ class AgentHub:
         self._store.upsert_agent(agent)
         return agent
 
+    def rename(self, agent_id: str, new_name: str) -> Agent:
+        """Rename an agent. Raises ValueError if name is taken by another agent."""
+        existing = self._store.get_agent_by_name(new_name)
+        if existing and existing.id != agent_id:
+            raise ValueError(f"Name '{new_name}' is already taken")
+        agent = self._store.get_agent(agent_id)
+        if agent is None:
+            raise KeyError(f"Agent not found: {agent_id}")
+        agent.name = new_name
+        self._store.upsert_agent(agent)
+        return agent
+
     def disconnect(self, agent_id: str) -> None:
         """Mark an agent as OFFLINE."""
         agent = self._store.get_agent(agent_id)

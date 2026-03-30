@@ -33,13 +33,21 @@ class ToolHandlers:
     def handle_introduce(
         self,
         agent_id: str,
+        name: str | None = None,
         introduction: str | None = None,
         description: str | None = None,
         skills: list[dict[str, Any]] | None = None,
         limitations: str | None = None,
     ) -> str:
-        """Update the caller's agent card."""
+        """Update the caller's agent card and optionally set a human-readable name."""
         from bifrost.store.models import AgentSkill
+
+        # Rename agent if name provided
+        if name:
+            try:
+                self._agents.rename(agent_id, name)
+            except ValueError as e:
+                return f"Could not set name: {e}"
 
         skill_objs = None
         if skills is not None:
