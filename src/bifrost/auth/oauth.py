@@ -136,6 +136,9 @@ class DexOAuthProvider:
         row = self._store.get_oauth_auth_code(authorization_code)
         if row is None or row["client_id"] != client.client_id:
             return None
+        if row["expires_at"] < time.time():
+            self._store.delete_oauth_auth_code(authorization_code)
+            return None
         return AuthorizationCode(
             code=row["code"],
             client_id=row["client_id"],
@@ -196,6 +199,9 @@ class DexOAuthProvider:
     ) -> RefreshToken | None:
         row = self._store.get_oauth_refresh_token(refresh_token)
         if row is None or row["client_id"] != client.client_id:
+            return None
+        if row["expires_at"] < int(time.time()):
+            self._store.delete_oauth_refresh_token(refresh_token)
             return None
         return RefreshToken(
             token=row["token"],

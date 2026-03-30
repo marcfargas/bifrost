@@ -14,4 +14,4 @@ RUN uv pip install --system .
 
 EXPOSE 8000
 
-CMD ["python", "-m", "uvicorn", "bifrost.spike_oauth:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "bifrost", "--host", "0.0.0.0", "--port", "8000"]

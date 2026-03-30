@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 from typing import Any
 
 from starlette.requests import Request
@@ -45,6 +46,9 @@ def _get_session_key(access_token: Any, *, insecure: bool) -> str:
     """
     if not insecure and access_token is not None:
         return access_token.token
+    # In insecure mode there's no access token to derive a unique key from.
+    # All insecure sessions share a single key, so only one agent can be
+    # active at a time.  A future improvement could use per-connection state.
     return "insecure"
 
 
@@ -147,7 +151,12 @@ def create_app(config: Config) -> FastMCP:
             state = request.query_params.get("state", "")
             if not code or not state:
                 return JSONResponse({"error": "Missing code or state"}, status_code=400)
-            redirect_url = await provider.handle_callback(code, state)
+            try:
+                redirect_url = await provider.handle_callback(code, state)
+            except ValueError as e:
+                return JSONResponse({"error": "authorization_failed", "error_description": str(e)}, status_code=400)
+            except Exception:
+                return JSONResponse({"error": "server_error", "error_description": "Failed to complete authorization"}, status_code=500)
             return RedirectResponse(redirect_url)
 
     # ------------------------------------------------------------------
@@ -173,7 +182,7 @@ def create_app(config: Config) -> FastMCP:
             oauth_subject = access_token.client_id
             placeholder = f"unnamed ({oauth_subject[:12]})"
         else:
-            placeholder = "unnamed"
+            placeholder = f"unnamed-{secrets.token_hex(4)}"
         agent = agents.register(placeholder, oauth_subject=access_token.client_id if access_token else "")
         session_agents[session_key] = agent.id
         return agent.id
@@ -264,7 +273,7 @@ def create_app(config: Config) -> FastMCP:
 
     @mcp.tool()
     async def bifrost_update_task(
-        conversation_id: str,
+        task_id: str,
         status: str = "",
         summary: str = "",
         reason: str = "",
@@ -275,15 +284,15 @@ def create_app(config: Config) -> FastMCP:
         if summary:
             artifacts = [{"text": summary}]
         return handlers.handle_update_task(
-            task_id=conversation_id,
+            task_id=task_id,
             status=status or None,
             artifacts=artifacts,
         )
 
     @mcp.tool()
-    async def bifrost_get_task(conversation_id: str) -> str:
+    async def bifrost_get_task(task_id: str) -> str:
         """Get detailed information about a specific task."""
-        return handlers.handle_get_task(task_id=conversation_id)
+        return handlers.handle_get_task(task_id=task_id)
 
     @mcp.tool()
     async def bifrost_list_tasks(
