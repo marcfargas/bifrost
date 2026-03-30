@@ -170,14 +170,6 @@ class Store:
             rows = self._conn.execute("SELECT * FROM agents").fetchall()
         return [self._row_to_agent(r) for r in rows]
 
-    def list_agents_by_oauth_subject(self, oauth_subject: str) -> list[Agent]:
-        """List agents owned by a specific OAuth user."""
-        rows = self._conn.execute(
-            "SELECT * FROM agents WHERE oauth_subject=? AND name NOT LIKE 'unnamed-%'",
-            (oauth_subject,),
-        ).fetchall()
-        return [self._row_to_agent(r) for r in rows]
-
     @staticmethod
     def _row_to_agent(row: sqlite3.Row) -> Agent:
         return Agent(

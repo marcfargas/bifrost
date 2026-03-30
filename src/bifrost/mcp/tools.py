@@ -51,7 +51,18 @@ class ToolHandlers:
 
         skill_objs = None
         if skills is not None:
-            skill_objs = [AgentSkill(**s) for s in skills]
+            skill_objs = [
+                AgentSkill(
+                    id=s.get("id", s.get("name", "unknown")),
+                    name=s.get("name", ""),
+                    description=s.get("description", ""),
+                    tags=s.get("tags", []),
+                    examples=s.get("examples", []),
+                    input_modes=s.get("input_modes", []),
+                    output_modes=s.get("output_modes", []),
+                )
+                for s in skills
+            ]
 
         metadata: dict[str, Any] | None = None
         if limitations is not None:

@@ -127,7 +127,8 @@ def create_app(config: Config) -> FastMCP:
                     agent = agents.register(placeholder, oauth_subject=oauth_subject)
                     session_agents[session_key] = agent.id
         except Exception:
-            pass  # Don't break list_tools if registration fails
+            import logging
+            logging.getLogger("bifrost").warning("Auto-registration failed", exc_info=True)
         return _original_list_tools()
 
     mcp._tool_manager.list_tools = _list_tools_with_registration
@@ -224,15 +225,18 @@ def create_app(config: Config) -> FastMCP:
         if not name:
             return "Error: name is required. Tell bifrost who you are."
 
-        agent_id = _introduce_agent(name)
-        return handlers.handle_introduce(
-            agent_id=agent_id,
-            name=name,
-            introduction=introduction or None,
-            description=description or None,
-            skills=skills,
-            limitations=limitations or None,
-        )
+        try:
+            agent_id = _introduce_agent(name)
+            return handlers.handle_introduce(
+                agent_id=agent_id,
+                name=name,
+                introduction=introduction or None,
+                description=description or None,
+                skills=skills,
+                limitations=limitations or None,
+            )
+        except (ValueError, KeyError) as e:
+            return f"Error: {e}"
 
     @mcp.tool()
     async def bifrost_whoami(
@@ -240,12 +244,15 @@ def create_app(config: Config) -> FastMCP:
         dnd_reason: str = "",
     ) -> str:
         """Check your identity or update your status (online, idle, dnd, offline)."""
-        agent_id = _get_session_agent()
-        return handlers.handle_whoami(
-            agent_id=agent_id,
-            status=status or None,
-            dnd_reason=dnd_reason or None,
-        )
+        try:
+            agent_id = _get_session_agent()
+            return handlers.handle_whoami(
+                agent_id=agent_id,
+                status=status or None,
+                dnd_reason=dnd_reason or None,
+            )
+        except (ValueError, KeyError) as e:
+            return f"Error: {e}"
 
     @mcp.tool()
     async def bifrost_list_agents(status: str = "") -> str:
@@ -259,17 +266,20 @@ def create_app(config: Config) -> FastMCP:
         description: str = "",
     ) -> str:
         """Request another agent to perform a task."""
-        agent_id = _get_session_agent()
-        metadata: dict[str, str] = {}
-        if title:
-            metadata["title"] = title
-        if description:
-            metadata["description"] = description
-        return handlers.handle_request_task(
-            requester_id=agent_id,
-            assignee_name=assignee,
-            metadata=metadata or None,
-        )
+        try:
+            agent_id = _get_session_agent()
+            metadata: dict[str, str] = {}
+            if title:
+                metadata["title"] = title
+            if description:
+                metadata["description"] = description
+            return handlers.handle_request_task(
+                requester_id=agent_id,
+                assignee_name=assignee,
+                metadata=metadata or None,
+            )
+        except (ValueError, KeyError) as e:
+            return f"Error: {e}"
 
     @mcp.tool()
     async def bifrost_update_task(
@@ -279,20 +289,27 @@ def create_app(config: Config) -> FastMCP:
         reason: str = "",
     ) -> str:
         """Update a task's status (accepted, in_progress, completed, failed, rejected)."""
-        _get_session_agent()  # Ensure introduced
-        artifacts = None
-        if summary:
-            artifacts = [{"text": summary}]
-        return handlers.handle_update_task(
-            task_id=task_id,
-            status=status or None,
-            artifacts=artifacts,
-        )
+        from bifrost.hub.tasks import InvalidTransition
+        try:
+            _get_session_agent()  # Ensure introduced
+            artifacts = None
+            if summary:
+                artifacts = [{"text": summary}]
+            return handlers.handle_update_task(
+                task_id=task_id,
+                status=status or None,
+                artifacts=artifacts,
+            )
+        except (ValueError, KeyError, InvalidTransition) as e:
+            return f"Error: {e}"
 
     @mcp.tool()
     async def bifrost_get_task(task_id: str) -> str:
         """Get detailed information about a specific task."""
-        return handlers.handle_get_task(task_id=task_id)
+        try:
+            return handlers.handle_get_task(task_id=task_id)
+        except (ValueError, KeyError) as e:
+            return f"Error: {e}"
 
     @mcp.tool()
     async def bifrost_list_tasks(
@@ -315,30 +332,42 @@ def create_app(config: Config) -> FastMCP:
         conversation_id: str = "",
     ) -> str:
         """Send a message to an agent, channel, or existing conversation."""
-        agent_id = _get_session_agent()
-        return handlers.handle_send(
-            from_agent_id=agent_id,
-            to=to or None,
-            channel=channel or None,
-            conversation_id=conversation_id or None,
-            body=body,
-        )
+        try:
+            agent_id = _get_session_agent()
+            return handlers.handle_send(
+                from_agent_id=agent_id,
+                to=to or None,
+                channel=channel or None,
+                conversation_id=conversation_id or None,
+                body=body,
+            )
+        except (ValueError, KeyError) as e:
+            return f"Error: {e}"
 
     @mcp.tool()
     async def bifrost_list_conversations(channel: str = "") -> str:
         """List active conversations, optionally filtered by channel."""
-        return handlers.handle_list_conversations(channel=channel or None)
+        try:
+            return handlers.handle_list_conversations(channel=channel or None)
+        except (ValueError, KeyError) as e:
+            return f"Error: {e}"
 
     @mcp.tool()
     async def bifrost_subscribe(target: str) -> str:
         """Subscribe to a channel or task for notifications."""
-        agent_id = _get_session_agent()
-        return handlers.handle_subscribe(agent_id=agent_id, target=target)
+        try:
+            agent_id = _get_session_agent()
+            return handlers.handle_subscribe(agent_id=agent_id, target=target)
+        except (ValueError, KeyError) as e:
+            return f"Error: {e}"
 
     @mcp.tool()
     async def bifrost_check() -> str:
         """Check for pending messages and events."""
-        agent_id = _get_session_agent()
-        return handlers.handle_check(agent_id=agent_id)
+        try:
+            agent_id = _get_session_agent()
+            return handlers.handle_check(agent_id=agent_id)
+        except (ValueError, KeyError) as e:
+            return f"Error: {e}"
 
     return mcp
