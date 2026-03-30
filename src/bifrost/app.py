@@ -129,9 +129,10 @@ def create_app(config: Config) -> FastMCP:
     # ------------------------------------------------------------------
 
     def _get_session_agent() -> str:
-        """Get the agent_id for the current session.
+        """Get or create the agent for the current session.
 
-        Raises ValueError if the agent hasn't introduced itself yet.
+        If not yet introduced, creates an unnamed placeholder so the agent
+        is visible in the registry. bifrost_introduce renames it later.
         """
         from mcp.server.auth.middleware.auth_context import get_access_token
 
@@ -141,9 +142,15 @@ def create_app(config: Config) -> FastMCP:
         if session_key in session_agents:
             return session_agents[session_key]
 
-        raise ValueError(
-            "You must call bifrost_introduce first to register your agent."
-        )
+        # Auto-register unnamed placeholder
+        if access_token is not None:
+            oauth_subject = access_token.client_id
+            placeholder = f"unnamed ({oauth_subject[:12]})"
+        else:
+            placeholder = "unnamed"
+        agent = agents.register(placeholder, oauth_subject=access_token.client_id if access_token else "")
+        session_agents[session_key] = agent.id
+        return agent.id
 
     def _introduce_agent(name: str) -> str:
         """Register or reconnect an agent by name. Binds to current session."""
