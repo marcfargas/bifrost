@@ -5,8 +5,7 @@ services:
       [
         "python",
         "-m",
-        "uvicorn",
-        "bifrost.spike_oauth:app",
+        "bifrost",
         "--host",
         "0.0.0.0",
         "--port",
