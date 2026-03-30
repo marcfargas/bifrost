@@ -128,11 +128,112 @@ Claude Code sessions (any machine)
 
 Both the MCP server and dashboard read/write the same data store. The dashboard is a read-heavy view layer; agents interact through MCP tools.
 
+## A2A Ecosystem (March 2026)
+
+### Key insight: A2A + MCP, not A2A vs MCP
+
+- **MCP** = agent-to-tool (how Claude Code accesses capabilities)
+- **A2A** = agent-to-agent (how agents discover, delegate, and communicate)
+- Bifrost should implement A2A as the protocol, with MCP as one transport for Claude Code agents
+
+### Existing A2A implementations
+
+| Project | URL | What it does |
+|---------|-----|-------------|
+| **a2a-python** | github.com/a2aproject/a2a-python | Google's official Python SDK. Agent Cards, task lifecycle, SSE. |
+| **claude-a2a** | github.com/jcwatson11/claude-a2a | **Most relevant.** TypeScript A2A server wrapping Claude Code CLI. Exposes local `claude` as a network A2A service. Includes MCP client for Claude Code to call remote agents. |
+| **A2A-MCP-Server** | github.com/GongRzhe/A2A-MCP-Server | MCP server bridging to A2A agents. Claude/MCP clients talk to A2A network. |
+| **MCP_A2A** | github.com/regismesquita/MCP_A2A | Lightweight Python MCP-to-A2A bridge for Claude Desktop. |
+| **a2a-mcp-with-security** | github.com/vishalmysore/a2a-mcp-with-security | Spring-based A2A+MCP with RBAC and web dashboard demo. |
+| **mcp-agentic-mesh** | github.com/vishalmysore/mcp-agentic-mesh | Multi-server A2A+MCP mesh for distributed agents. |
+
+### claude-a2a deep dive (most relevant to bifrost)
+
+`jcwatson11/claude-a2a` does almost exactly what bifrost v2 needs:
+
+**Architecture:**
+- Express server + @a2a-js/sdk (A2A v0.3.0)
+- Spawns long-lived `claude` CLI process per session (`--input-format stream-json --output-format stream-json`)
+- NDJSON stdin/stdout for message passing
+- Session continuity via kept-alive process + `--resume` for recovery
+- Agent Card at `/.well-known/agent-card.json`
+
+**Features:**
+- Multi-agent configs (each agent = named config with model, work_dir, system prompt, permissions)
+- A2A JSON-RPC + REST transports
+- MCP client so interactive Claude Code sessions can call remote agents
+- Auth: master key + JWT tokens with per-agent scopes
+- Rate limiting (token-bucket, per-client)
+- Budget tracking (daily limits, per-client, per-invocation max)
+- Cost tracking per response (metadata.claude field)
+- Multimodal input (images, PDFs via A2A FilePart)
+- Session management (idle timeout, max lifetime, per-client limits)
+- `npx claude-a2a-cli serve` — zero-install deployment
+
+**What it's missing (bifrost opportunity):**
+- **No web dashboard** — no visibility into running agents, tasks, activity
+- **No observability layer** — can see agent cards and send messages, but no "what's happening across my fleet" view
+- **No persistent task board** — A2A tasks exist during execution, no historical view
+- **No channels/broadcast** — point-to-point only
+- **No push notifications to agents** — A2A is request/response; no way to inject messages into an active Claude Code session (acknowledged in their README as a limitation)
+
+### Implications for bifrost v2
+
+**Option A: Build on claude-a2a**
+- Fork or wrap claude-a2a, add the dashboard/observability layer
+- TypeScript (matches the existing codebase's ecosystem)
+- Already solves: agent spawning, A2A protocol, auth, budgets, multi-agent config
+- We add: web dashboard, persistent task board, activity feed, channels
+
+**Option B: Build bifrost v2 from scratch using a2a-python SDK**
+- Python/FastAPI as originally planned in v2 concept doc
+- Use Google's official SDK for A2A protocol compliance
+- Build everything else ourselves
+- More work but more control
+
+**Option C: Hybrid — bifrost as the orchestration/dashboard layer, claude-a2a as the agent runtime**
+- claude-a2a handles spawning and A2A protocol per agent
+- Bifrost sits above as the fleet manager: dashboard, task board, cross-agent coordination
+- Bifrost talks to claude-a2a instances via A2A protocol
+- Clean separation of concerns
+
+## Revised Architecture Direction
+
+```
+                    Web Dashboard (agents.blegal.dev)
+                           │
+                           ↓
+                  ┌──────────────────┐
+                  │  Bifrost Hub     │
+                  │  - Agent registry│
+                  │  - Task board    │
+                  │  - Activity feed │
+                  │  - Conversations │
+                  └────────┬─────────┘
+                           │ A2A protocol
+                           ↓
+              ┌────────────────────────┐
+              │  claude-a2a server     │
+              │  (per-machine or       │
+              │   single instance)     │
+              │  - Agent Cards         │
+              │  - Claude CLI spawning │
+              │  - Auth + budgets      │
+              │  - Session management  │
+              └────────────────────────┘
+                           │
+                           ↓
+                    Claude Code CLI
+                    (host processes)
+```
+
+OR simpler: merge both into one service.
+
 ## Open Questions for Bifrost v2
 
-1. **Coexistence with v1?** — v1 (Go, local hub) is already deployed. Can agents use either? Or is v2 a clean break?
-2. **Dashboard tech** — React (most familiar from Paperclip ecosystem)? Or something lighter?
-3. **Mayor pattern** — Does the Mayor agent get special treatment in bifrost, or is it just another agent that happens to be interactive?
-4. **Agent lifecycle** — Should bifrost track agent liveness (heartbeat/ping), or just track "last seen" from MCP connections?
-5. **Git integration** — Should bifrost know about git state (branches, commits) or leave that to agents?
-6. **LiteLLM integration** — Pull cost data from LiteLLM for the dashboard? Or keep them separate?
+1. **Build on claude-a2a or build from scratch?** — claude-a2a solves agent spawning + A2A protocol but is TypeScript/Express. Bifrost v2 concept doc said Python/FastAPI.
+2. **One service or two?** — Bifrost hub + claude-a2a as separate services, or merge into one?
+3. **Dashboard tech** — React? Something lighter?
+4. **Push notifications** — claude-a2a acknowledges no way to inject messages into active Claude Code sessions. Bifrost v1 solved this via channels. How to bring that to v2?
+5. **Coexistence with v1?** — v1 (Go, local hub) still works. Clean break or migration path?
+6. **LiteLLM integration** — Pull cost data from LiteLLM? claude-a2a already tracks per-invocation cost.
