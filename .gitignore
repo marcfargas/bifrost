@@ -28,3 +28,11 @@ Thumbs.db
 
 # Build
 dist/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+*.db
