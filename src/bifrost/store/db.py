@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 from bifrost.store.models import (
@@ -467,7 +468,7 @@ class Store:
     def save_oauth_client(self, client_id: str, client_info_json: str) -> None:
         self._conn.execute(
             "INSERT OR REPLACE INTO oauth_clients (client_id, client_info, created_at) VALUES (?, ?, ?)",
-            (client_id, client_info_json, _now_iso()),
+            (client_id, client_info_json, datetime.now(timezone.utc).isoformat()),
         )
         self._conn.commit()
 
