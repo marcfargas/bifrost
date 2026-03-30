@@ -256,6 +256,77 @@ Both the MCP server and dashboard read/write the same data store. The dashboard 
 
 OR simpler: merge both into one service.
 
+## OctoAlly (ai-genius-automations/octoally) — 67 stars, created 2026-03-12
+
+Web dashboard for Claude Code + Ruflo. React + Fastify + SQLite, local-first.
+
+**Features:** Live session grid, hive-mind orchestration view, streaming output, interactive terminals (tmux-backed, pop-out/adopt-back), git source control (diffs, staging, commits), per-project agent configs, session persistence, voice dictation (local Whisper), dual CLI support (Claude + Codex).
+
+**Architecture:** React 19 + Vite frontend, Fastify + SQLite backend, node-pty + tmux for sessions, WebSocket for streaming.
+
+**Install:** `npx octoally@latest` — installs, starts server, launches dashboard at localhost:42010. `octoally install-service` for systemd.
+
+**Integration with Ruflo:** OctoAlly initializes projects with Ruflo config and agent definitions. Launches hive-mind sessions via Ruflo. But maintained by different org (ai-genius-automations vs ruvnet) — integration depth unverified.
+
+**Risk assessment:** 18 days old at time of evaluation. Prototype maturity. Unknown developer commitment. No community, no LTS, no security audit. Terminal pop-out feature is a security surface if auth is bypassed.
+
+## Adversarial Review (against Ruflo + OctoAlly adoption)
+
+An adversarial review was conducted against the initial proposal to adopt Ruflo + OctoAlly. Key findings:
+
+### Critical gaps
+- **Coordination not solved.** Neither Ruflo nor OctoAlly provides structured agent-to-agent messaging or task delegation with dependency tracking. Ruflo's swarm consensus (Raft, BFT) solves distributed systems coordination, not "Agent A needs types from Agent B's repo."
+- **OctoAlly is a session grid, not a task board.** No persistent task lifecycle across sessions, no dependency awareness.
+- **Interactive session quality unverified.** Can you have a real conversation through OctoAlly's web terminal, or is it read-only with input?
+
+### Maturity risks
+- **OctoAlly: 18 days old, 67 stars.** Not production infrastructure.
+- **Ruflo: 28k stars but massive surface area.** 310 MCP tools, WASM, RL — single primary maintainer. Debugging RL reward functions is not "just works."
+- **Integration assumed, not verified.** No evidence anyone runs OctoAlly + Ruflo together in production.
+- **No fallback plan.** When OctoAlly ships a breaking change (inevitable for an 18-day-old project), what do you revert to?
+
+### Complexity vs. need
+- Ruflo's 310 MCP tools, consensus protocols, and self-learning system are enterprise-scale for a solo dev running 5-10 agents.
+- "Just works" in the requirements doc → Ruflo is the opposite of "just works."
+
+### Security concerns
+- OctoAlly exposes a web dashboard with terminal access. Behind OAuth, but no security audit.
+- Both tools run as `marc` with full access to all projects, git credentials, API keys.
+
+### What was nearly overlooked
+- **oh-my-claudecode** solves within-project orchestration with zero infrastructure but is per-project, not cross-project fleet management.
+- **claude-a2a** provides a clean A2A agent runtime that could be the foundation for a lighter build.
+- **A proof-of-concept was never done.** The proposal was heading to deployment without installing either tool.
+
+## Conclusions
+
+### The missing piece nobody has built
+
+A **lightweight fleet dashboard** that:
+1. Shows all agents across all projects (cross-project visibility)
+2. Lets you launch/stop agents from one place (lifecycle management)
+3. Enables agents to communicate across projects (coordination)
+
+Every tool evaluated solves 1-2 of these but not all 3. The tools that attempt all 3 (Ruflo + OctoAlly) are either too immature or too complex.
+
+### Realistic paths forward
+
+**Path A: Accept the pain, use what works today.**
+SSH + tmux + manual management. Possibly add oh-my-claudecode for within-project orchestration. Revisit in Q3 2026 when the landscape matures. Zero risk, zero new infrastructure.
+
+**Path B: Build the missing dashboard layer.**
+A lightweight web UI on nexus that reads tmux sessions, shows agent status, and manages launch/stop. This is a focused, small-scope project — not a full orchestration platform. Bifrost v1 already handles agent-to-agent communication. The dashboard is the only missing piece.
+
+**Path C: Build on claude-a2a.**
+Use claude-a2a as the agent runtime (A2A protocol, agent spawning, auth, budgets). Build a thin dashboard/fleet-manager on top (bifrost v2 as the hub). More work than Path B, but gives you A2A compatibility and a proper agent lifecycle.
+
+**Path D: Adopt Ruflo + OctoAlly with a proof-of-concept first.**
+Install both on nexus, verify integration, verify WebSocket proxying through Traefik, verify interactive terminal quality. Only proceed to "production" if the PoC works. High potential payoff if it works, high risk if it doesn't.
+
+### Recommendation
+
+**Path A now, Path C when ready to build.** Use the current setup (SSH + tmux) while the landscape matures. When time permits, build bifrost v2 as a thin layer over claude-a2a — focused on the dashboard and fleet management that nothing else provides. Keep the scope minimal: agent registry, session status, task board, web UI. Don't build consensus protocols, RL routing, or WASM kernels.
+
 ## Open Questions for Bifrost v2
 
 1. **Build on claude-a2a or build from scratch?** — claude-a2a solves agent spawning + A2A protocol but is TypeScript/Express. Bifrost v2 concept doc said Python/FastAPI.
@@ -264,3 +335,4 @@ OR simpler: merge both into one service.
 4. **Push notifications** — claude-a2a acknowledges no way to inject messages into active Claude Code sessions. Bifrost v1 solved this via channels. How to bring that to v2?
 5. **Coexistence with v1?** — v1 (Go, local hub) still works. Clean break or migration path?
 6. **LiteLLM integration** — Pull cost data from LiteLLM? claude-a2a already tracks per-invocation cost.
+7. **Scope discipline** — The biggest risk is scope creep. The missing piece is a dashboard + fleet manager, not an orchestration platform.
