@@ -380,6 +380,8 @@ def create_app(
         )
 
         # Protected Resource Metadata (RFC 9728) — tells clients where the AS lives
+        # Mount at FastAPI root level so it's accessible at
+        # /.well-known/oauth-protected-resource (not nested under /mcp)
         resource_routes = create_protected_resource_routes(
             resource_url=resource_url,
             authorization_servers=[issuer_url],
@@ -387,20 +389,22 @@ def create_app(
             resource_name="Bifrost MCP Server",
         )
 
-        # Mount the protected MCP endpoint and resource metadata
-        # We use a Starlette Router to apply middleware to the MCP route only
         from starlette.applications import Starlette
-        from starlette.routing import Mount as StarletteMount
 
+        # Mount .well-known routes at root level (not under /mcp).
+        # The SDK generates route at /.well-known/oauth-protected-resource/mcp/
+        # which needs to be accessible from the root, not nested under /mcp.
+        for route in resource_routes:
+            fastapi_app.routes.insert(0, route)
+
+        # Mount the protected MCP endpoint with auth middleware
         mcp_starlette = Starlette(
             routes=[
                 Route("/", endpoint=auth_protected_mcp),
-                *resource_routes,
             ],
             middleware=middleware,
         )
 
-        # Mount the Starlette app at /mcp on the FastAPI app
         fastapi_app.mount("/mcp", app=mcp_starlette)
 
     else:
