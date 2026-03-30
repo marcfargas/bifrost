@@ -11,7 +11,7 @@ class Config:
 
     host: str = "0.0.0.0"
     port: int = 8000
-    db_path: str = "bifrost.db"
+    db_path: str = "data/bifrost.db"
     insecure: bool = False
 
     # OIDC settings (required unless --insecure)

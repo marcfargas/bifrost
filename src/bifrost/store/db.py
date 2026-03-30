@@ -88,6 +88,37 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     target   TEXT NOT NULL,
     PRIMARY KEY (agent_id, target)
 );
+
+-- OAuth persistence (survives restarts)
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    client_id   TEXT PRIMARY KEY,
+    client_info TEXT NOT NULL,  -- JSON: OAuthClientInformationFull
+    created_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS oauth_access_tokens (
+    token       TEXT PRIMARY KEY,
+    client_id   TEXT NOT NULL,
+    scopes      TEXT NOT NULL DEFAULT '[]',  -- JSON array
+    expires_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
+    token       TEXT PRIMARY KEY,
+    client_id   TEXT NOT NULL,
+    scopes      TEXT NOT NULL DEFAULT '[]',  -- JSON array
+    expires_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS oauth_auth_codes (
+    code        TEXT PRIMARY KEY,
+    client_id   TEXT NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    redirect_uri_provided_explicitly INTEGER NOT NULL DEFAULT 1,
+    code_challenge TEXT NOT NULL,
+    scopes      TEXT NOT NULL DEFAULT '[]',  -- JSON array
+    expires_at  REAL NOT NULL
+);
 """
 
 
@@ -428,6 +459,99 @@ class Store:
             "SELECT agent_id FROM subscriptions WHERE target=?", (target,),
         ).fetchall()
         return [r["agent_id"] for r in rows]
+
+    # ------------------------------------------------------------------
+    # OAuth persistence
+    # ------------------------------------------------------------------
+
+    def save_oauth_client(self, client_id: str, client_info_json: str) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO oauth_clients (client_id, client_info, created_at) VALUES (?, ?, ?)",
+            (client_id, client_info_json, _now_iso()),
+        )
+        self._conn.commit()
+
+    def get_oauth_client(self, client_id: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT client_info FROM oauth_clients WHERE client_id=?", (client_id,),
+        ).fetchone()
+        return row["client_info"] if row else None
+
+    def save_oauth_access_token(
+        self, token: str, client_id: str, scopes: list[str], expires_at: int,
+    ) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO oauth_access_tokens (token, client_id, scopes, expires_at) VALUES (?, ?, ?, ?)",
+            (token, client_id, json.dumps(scopes), expires_at),
+        )
+        self._conn.commit()
+
+    def get_oauth_access_token(self, token: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT * FROM oauth_access_tokens WHERE token=?", (token,),
+        ).fetchone()
+        if not row:
+            return None
+        return {"token": row["token"], "client_id": row["client_id"],
+                "scopes": json.loads(row["scopes"]), "expires_at": row["expires_at"]}
+
+    def delete_oauth_access_token(self, token: str) -> None:
+        self._conn.execute("DELETE FROM oauth_access_tokens WHERE token=?", (token,))
+        self._conn.commit()
+
+    def save_oauth_refresh_token(
+        self, token: str, client_id: str, scopes: list[str], expires_at: int,
+    ) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO oauth_refresh_tokens (token, client_id, scopes, expires_at) VALUES (?, ?, ?, ?)",
+            (token, client_id, json.dumps(scopes), expires_at),
+        )
+        self._conn.commit()
+
+    def get_oauth_refresh_token(self, token: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT * FROM oauth_refresh_tokens WHERE token=?", (token,),
+        ).fetchone()
+        if not row:
+            return None
+        return {"token": row["token"], "client_id": row["client_id"],
+                "scopes": json.loads(row["scopes"]), "expires_at": row["expires_at"]}
+
+    def delete_oauth_refresh_token(self, token: str) -> None:
+        self._conn.execute("DELETE FROM oauth_refresh_tokens WHERE token=?", (token,))
+        self._conn.commit()
+
+    def save_oauth_auth_code(
+        self, code: str, client_id: str, redirect_uri: str,
+        redirect_uri_provided_explicitly: bool, code_challenge: str,
+        scopes: list[str], expires_at: float,
+    ) -> None:
+        self._conn.execute(
+            """INSERT OR REPLACE INTO oauth_auth_codes
+               (code, client_id, redirect_uri, redirect_uri_provided_explicitly, code_challenge, scopes, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (code, client_id, redirect_uri, int(redirect_uri_provided_explicitly),
+             code_challenge, json.dumps(scopes), expires_at),
+        )
+        self._conn.commit()
+
+    def get_oauth_auth_code(self, code: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT * FROM oauth_auth_codes WHERE code=?", (code,),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "code": row["code"], "client_id": row["client_id"],
+            "redirect_uri": row["redirect_uri"],
+            "redirect_uri_provided_explicitly": bool(row["redirect_uri_provided_explicitly"]),
+            "code_challenge": row["code_challenge"],
+            "scopes": json.loads(row["scopes"]), "expires_at": row["expires_at"],
+        }
+
+    def delete_oauth_auth_code(self, code: str) -> None:
+        self._conn.execute("DELETE FROM oauth_auth_codes WHERE code=?", (code,))
+        self._conn.commit()
 
 
 # ---------------------------------------------------------------------------

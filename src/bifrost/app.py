@@ -84,6 +84,7 @@ def create_app(config: Config) -> FastMCP:
         from bifrost.auth.oauth import DexOAuthProvider
 
         provider = DexOAuthProvider(
+            store=store,
             issuer=config.oidc_issuer,
             client_id=config.oidc_client_id,
             client_secret=config.oidc_client_secret,

@@ -16,5 +16,10 @@ services:
       - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-}
       - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
       - SERVER_URL=${SERVER_URL:-}
+    volumes:
+      - data:/app/data
     ports:
       - "8000:8000"
+
+volumes:
+  data:

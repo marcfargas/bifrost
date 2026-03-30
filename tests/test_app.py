@@ -92,7 +92,7 @@ class TestConfig:
         c = Config()
         assert c.host == "0.0.0.0"
         assert c.port == 8000
-        assert c.db_path == "bifrost.db"
+        assert c.db_path == "data/bifrost.db"
         assert c.insecure is False
 
     def test_custom_config(self, tmp_path):
