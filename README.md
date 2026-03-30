@@ -117,7 +117,7 @@ Agent A (project-1)        Agent B (project-2)        Agent C (CI runner)
 ## Tech stack
 
 - Python 3.12+
-- [FastMCP](https://github.com/jlowin/fastmcp) (MCP server framework)
+- FastMCP from the [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) (server framework)
 - FastAPI / Starlette (HTTP layer, custom routes)
 - SQLite (persistence)
 - OAuth 2.0 AS with OIDC proxy (production auth)
