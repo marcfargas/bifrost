@@ -378,3 +378,22 @@ def create_app(config: Config) -> FastMCP:
             return f"Error: {e}"
 
     return mcp
+
+
+def create_app_uvicorn() -> Any:
+    """ASGI app factory for uvicorn (used by docker-compose.dev.yml --reload)."""
+    import os
+
+    config = Config(
+        host=os.environ.get("HOST", "0.0.0.0"),
+        port=int(os.environ.get("PORT", "8000")),
+        db_path=os.environ.get("DB_PATH", "data/bifrost.db"),
+        insecure=os.environ.get("INSECURE", "").lower() in ("1", "true", "yes"),
+        oidc_issuer=os.environ.get("OIDC_ISSUER", ""),
+        oidc_client_id=os.environ.get("OIDC_CLIENT_ID", ""),
+        oidc_client_secret=os.environ.get("OIDC_CLIENT_SECRET", ""),
+        server_url=os.environ.get("SERVER_URL", ""),
+    )
+
+    mcp = create_app(config)
+    return mcp.streamable_http_app()

@@ -1,0 +1,80 @@
+version: "3"
+
+vars:
+  PYTHON: .venv/bin/python
+  PYTEST: .venv/bin/pytest
+  COMPOSE_DEV: docker compose -f docker-compose.yml -f docker-compose.dev.yml
+
+tasks:
+  install:
+    desc: Create venv and install with dev dependencies
+    cmds:
+      - python3 -m venv .venv
+      - .venv/bin/pip install -e ".[dev]"
+    status:
+      - test -f .venv/bin/pytest
+
+  test:
+    desc: Run all tests
+    deps: [install]
+    cmds:
+      - "{{.PYTEST}} tests/ {{.CLI_ARGS}}"
+
+  test:watch:
+    desc: Run tests on file change
+    deps: [install]
+    cmds:
+      - "{{.PYTEST}} tests/ --tb=short -q {{.CLI_ARGS}}"
+    watch: true
+    sources:
+      - src/**/*.py
+      - tests/**/*.py
+
+  dev:
+    desc: Run locally in insecure mode
+    deps: [install]
+    cmds:
+      - "{{.PYTHON}} -m bifrost --insecure {{.CLI_ARGS}}"
+
+  dev:reload:
+    desc: Run locally with auto-reload
+    deps: [install]
+    cmds:
+      - INSECURE=1 .venv/bin/uvicorn bifrost.app:create_app_uvicorn --host 0.0.0.0 --port 8000 --reload --reload-dir src
+
+  up:
+    desc: Build and start with docker compose (dev overlay)
+    cmds:
+      - "{{.COMPOSE_DEV}} up -d --build {{.CLI_ARGS}}"
+
+  down:
+    desc: Stop docker compose
+    cmds:
+      - "{{.COMPOSE_DEV}} down {{.CLI_ARGS}}"
+
+  logs:
+    desc: Tail docker compose logs
+    cmds:
+      - "{{.COMPOSE_DEV}} logs -f {{.CLI_ARGS}}"
+
+  build:
+    desc: Build docker image only
+    cmds:
+      - docker compose build
+
+  deploy:
+    desc: Rebuild and restart on nexus (run from nexus)
+    cmds:
+      - "{{.COMPOSE_DEV}} up -d --build --force-recreate"
+
+  lint:
+    desc: Type check with pyright
+    deps: [install]
+    cmds:
+      - .venv/bin/pyright src/
+
+  clean:
+    desc: Remove build artifacts and caches
+    cmds:
+      - rm -rf .venv build dist *.egg-info
+      - find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
