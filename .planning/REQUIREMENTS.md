@@ -13,7 +13,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 - [ ] **DASH-02**: User can view task board with status, assignee, requester, and filtering
 - [ ] **DASH-03**: User can view conversation message history
 - [ ] **DASH-04**: User can view activity feed of recent events across all conversations
-- [ ] **DASH-05**: Dashboard pages update via htmx partials without full page reload
+- [x] **DASH-05**: Dashboard pages update via htmx partials without full page reload
 
 ### Dashboard Interactivity
 
@@ -24,7 +24,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Human Operator
 
-- [ ] **HUMAN-01**: A virtual "human" agent exists with an `is_human` flag on the Agent model
+- [x] **HUMAN-01**: A virtual "human" agent exists with an `is_human` flag on the Agent model
 - [ ] **HUMAN-02**: Human operator is distinguishable from regular agents in both UI and API responses
 - [ ] **HUMAN-03**: Messages sent from dashboard are attributed to the human operator agent
 
@@ -79,8 +79,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DASH-02 | Phase 1 | Pending |
 | DASH-03 | Phase 1 | Pending |
 | DASH-04 | Phase 1 | Pending |
-| DASH-05 | Phase 1 | Pending |
-| HUMAN-01 | Phase 1 | Pending |
+| DASH-05 | Phase 1 | Complete |
+| HUMAN-01 | Phase 1 | Complete |
 | HUMAN-02 | Phase 1 | Pending |
 | INTX-01 | Phase 2 | Pending |
 | INTX-02 | Phase 2 | Pending |

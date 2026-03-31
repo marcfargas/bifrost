@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-stopped_at: Phase 1 UI-SPEC approved
-last_updated: "2026-03-31T10:00:33.175Z"
-last_activity: 2026-03-30 — Roadmap created, ready to begin Phase 1 planning
+status: executing
+stopped_at: Completed 01-01-PLAN.md
+last_updated: "2026-03-31T12:31:49.616Z"
+last_activity: 2026-03-31
 progress:
   total_phases: 4
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_plans: 3
+  completed_plans: 1
   percent: 0
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-30)
 
 **Core value:** Agents can find each other and exchange messages and tasks through a single shared hub
-**Current focus:** Phase 1 — Foundation + Read-Only Dashboard
+**Current focus:** Phase 01 — foundation-read-only-dashboard
 
 ## Current Position
 
-Phase: 1 of 4 (Foundation + Read-Only Dashboard)
-Plan: 0 of ? in current phase
-Status: Ready to plan
-Last activity: 2026-03-30 — Roadmap created, ready to begin Phase 1 planning
+Phase: 01 (foundation-read-only-dashboard) — EXECUTING
+Plan: 2 of 3
+Status: Ready to execute
+Last activity: 2026-03-31
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -52,6 +52,7 @@ Progress: [░░░░░░░░░░] 0%
 - Trend: —
 
 *Updated after each plan completion*
+| Phase 01 P01 | 97s | 2 tasks | 15 files |
 
 ## Accumulated Context
 
@@ -64,6 +65,7 @@ Recent decisions affecting current work:
 - Human operator as flagged Agent record — agents can distinguish human messages
 - Channel push via SSE — polling doesn't work in practice
 - Reuse existing OIDC OAuth for dashboard — one less thing to build
+- [Phase 01]: TestClient (sync) for dashboard tests instead of async httpx -- simpler for HTML route testing
 
 ### Pending Todos
 
@@ -76,6 +78,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-31T10:00:33.171Z
-Stopped at: Phase 1 UI-SPEC approved
-Resume file: .planning/phases/01-foundation-read-only-dashboard/01-UI-SPEC.md
+Last session: 2026-03-31T12:31:49.613Z
+Stopped at: Completed 01-01-PLAN.md
+Resume file: None
