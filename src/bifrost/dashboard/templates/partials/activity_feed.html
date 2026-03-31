@@ -1,14 +1,14 @@
 {% if events %}
 {% for event in events %}
-<article>
-  <header>
-    <small>{{ event.timestamp | fmt_time }}</small>
-    <span class="badge">{{ event.type }}</span>
-    <strong>{{ agent_names.get(event.from_agent, event.from_agent[:8]) }}</strong>
+<article class="bg-white rounded-lg p-4 mb-3 shadow-sm">
+  <header class="flex items-center gap-2">
+    <small class="text-gray-400 text-xs">{{ event.timestamp | fmt_time }}</small>
+    <span class="px-2 py-0.5 text-xs rounded bg-gray-200">{{ event.type }}</span>
+    <strong class="text-sm font-semibold">{{ agent_names.get(event.from_agent, event.from_agent[:8]) }}</strong>
   </header>
-  <p>{{ event.data | fmt_event(event.type) }}</p>
+  <p class="mt-1 text-gray-700">{{ event.data | fmt_event(event.type) }}</p>
 </article>
 {% endfor %}
 {% else %}
-<p>No activity yet.</p>
+<p class="text-gray-500">No activity yet.</p>
 {% endif %}

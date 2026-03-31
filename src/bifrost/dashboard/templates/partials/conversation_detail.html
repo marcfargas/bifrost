@@ -1,28 +1,28 @@
-<h3>{{ conversation.title or conversation.id[:12] }}</h3>
-{% if conversation.channel %}<small>Channel: {{ conversation.channel }}</small>{% endif %}
-<hr>
+<h3 class="text-xl font-bold">{{ conversation.title or conversation.id[:12] }}</h3>
+{% if conversation.channel %}<p class="text-gray-500 text-sm">Channel: {{ conversation.channel }}</p>{% endif %}
+<div class="border-t border-gray-200 my-3"></div>
 {% if events %}
 {% for event in events %}
-<article>
-  <header>
-    <strong>{{ agent_names.get(event.from_agent, event.from_agent[:8]) }}</strong>
-    <small>{{ event.timestamp | fmt_time }}</small>
+<article class="bg-white rounded-lg p-4 mb-3 shadow-sm">
+  <header class="flex justify-between">
+    <strong class="text-sm">{{ agent_names.get(event.from_agent, event.from_agent[:8]) }}</strong>
+    <small class="text-gray-400 text-sm">{{ event.timestamp | fmt_time }}</small>
   </header>
   {% if event.type == "message" %}
     {% for part in event.data.get("parts", []) %}
       {% if part.type == "text" %}
-      <p>{{ part.text }}</p>
+      <p class="mt-2">{{ part.text }}</p>
       {% elif part.type == "file" %}
-      <p><em>[File: {{ part.get("mime_type", "unknown") }}]</em></p>
+      <p class="mt-2 bg-gray-100 p-2 rounded text-sm"><em>[File: {{ part.get("mime_type", "unknown") }}]</em></p>
       {% elif part.type == "data" %}
-      <p><code>{{ part.data | tojson }}</code></p>
+      <p class="mt-2 bg-gray-100 p-2 rounded text-sm"><code>{{ part.data | tojson }}</code></p>
       {% endif %}
     {% endfor %}
   {% else %}
-  <p><em>{{ event.type }}: {{ event.data | fmt_event(event.type) }}</em></p>
+  <p class="mt-2 text-gray-600"><em>{{ event.type }}: {{ event.data | fmt_event(event.type) }}</em></p>
   {% endif %}
 </article>
 {% endfor %}
 {% else %}
-<p>No messages in this conversation.</p>
+<p class="text-gray-500">No messages in this conversation.</p>
 {% endif %}

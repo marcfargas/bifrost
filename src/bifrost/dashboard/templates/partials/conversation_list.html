@@ -1,14 +1,14 @@
 {% if conversations %}
 {% for conv in conversations %}
-<article class="conv-item"
+<article class="bg-white rounded-lg p-3 mb-2 shadow-sm hover:bg-gray-50 cursor-pointer transition"
          hx-get="/conversations/{{ conv.id }}/messages"
          hx-target="#conv-detail"
          hx-swap="innerHTML">
-  <strong>{{ conv.title or conv.id[:12] }}</strong>
-  {% if conv.channel %}<br><small>{{ conv.channel }}</small>{% endif %}
-  <br><small>{{ conv.created_at | fmt_time }}</small>
+  <strong class="text-sm">{{ conv.title or conv.id[:12] }}</strong>
+  {% if conv.channel %}<p class="text-gray-500 text-sm">{{ conv.channel }}</p>{% endif %}
+  <p class="text-gray-400 text-xs">{{ conv.created_at | fmt_time }}</p>
 </article>
 {% endfor %}
 {% else %}
-<p>No conversations.</p>
+<p class="text-gray-500">No conversations.</p>
 {% endif %}

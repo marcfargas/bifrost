@@ -1,45 +1,47 @@
 {% if human %}
-<section>
-  <h2>Human Operator</h2>
-  <article class="human-card">
-    <strong>{{ human.name }}</strong>
-    <span class="badge">Human</span>
-    <br>
-    <span class="status-dot {{ human.status }}"></span>
-    {{ human.status | capitalize }}
-    <br>
-    <small>Last seen: {{ human.last_seen | fmt_time }}</small>
+<section class="mb-6">
+  <h2 class="text-lg font-semibold mb-3">Human Operator</h2>
+  <article class="human-card border-l-4 border-blue-500 pl-4 p-4 bg-white rounded-lg shadow-sm">
+    <div class="flex items-center gap-2 mb-1">
+      <strong class="text-base">{{ human.name }}</strong>
+      <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded bg-purple-100 text-purple-700">Human</span>
+    </div>
+    <div class="flex items-center gap-1 text-sm">
+      <span class="status-dot w-2 h-2 rounded-full inline-block mr-1 {% if human.status == 'online' %}bg-blue-500{% elif human.status == 'idle' %}bg-yellow-500{% elif human.status == 'dnd' %}bg-red-600{% else %}bg-gray-400{% endif %}"></span>
+      {{ human.status | capitalize }}
+    </div>
+    <p class="text-gray-500 text-sm mt-1">Last seen: {{ human.last_seen | fmt_time }}</p>
     {% if human.card and human.card.skills %}
-    <br><small>Skills: {{ human.card.skills | map(attribute='name') | join(', ') }}</small>
+    <p class="text-gray-500 text-sm">Skills: {{ human.card.skills | map(attribute='name') | join(', ') }}</p>
     {% endif %}
   </article>
 </section>
 {% endif %}
 
 <section>
-  <h2>Agents</h2>
+  <h2 class="text-lg font-semibold mb-3">Agents</h2>
   {% if agents %}
-  <div class="agent-card-grid">
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
     {% for agent in agents %}
-    <article>
-      <strong>{{ agent.name }}</strong>
-      <br>
-      <span class="status-dot {{ agent.status }}"></span>
-      {{ agent.status | capitalize }}
-      <br>
-      <small>Last seen: {{ agent.last_seen | fmt_time }}</small>
+    <article class="bg-white rounded-lg shadow-sm p-4">
+      <strong class="text-base">{{ agent.name }}</strong>
+      <div class="flex items-center gap-1 text-sm mt-1">
+        <span class="status-dot w-2 h-2 rounded-full inline-block mr-1 {% if agent.status == 'online' %}bg-blue-500{% elif agent.status == 'idle' %}bg-yellow-500{% elif agent.status == 'dnd' %}bg-red-600{% else %}bg-gray-400{% endif %}"></span>
+        {{ agent.status | capitalize }}
+      </div>
+      <p class="text-gray-500 text-sm mt-1">Last seen: {{ agent.last_seen | fmt_time }}</p>
       {% if agent.card %}
         {% if agent.card.description %}
-        <br><small>{{ agent.card.description }}</small>
+        <p class="text-gray-600 text-sm mt-1">{{ agent.card.description }}</p>
         {% endif %}
         {% if agent.card.skills %}
-        <br><small>Skills: {{ agent.card.skills | map(attribute='name') | join(', ') }}</small>
+        <p class="text-gray-500 text-sm">Skills: {{ agent.card.skills | map(attribute='name') | join(', ') }}</p>
         {% endif %}
       {% endif %}
     </article>
     {% endfor %}
   </div>
   {% else %}
-  <p>No agents connected.</p>
+  <p class="text-gray-500">No agents connected.</p>
   {% endif %}
 </section>
