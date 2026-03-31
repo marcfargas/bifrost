@@ -34,7 +34,7 @@ Plans:
 - [x] 01-01-PLAN.md — Model + schema migration, dashboard route infrastructure, base template
 - [x] 01-02-PLAN.md — Agent directory (card grid) and task board (filtered list with badges)
 - [x] 01-03-PLAN.md — Conversation viewer (two-panel) and activity feed
-- [ ] 01-04-PLAN.md — Gap closure: is_human indicator in MCP tool responses (HUMAN-02)
+- [x] 01-04-PLAN.md — Gap closure: is_human indicator in MCP tool responses (HUMAN-02)
 **UI hint**: yes
 
 ### Phase 2: Human Operator + Interactive Actions

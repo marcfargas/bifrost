@@ -9,8 +9,8 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Dashboard Views
 
-- [ ] **DASH-01**: User can view agent directory with cards, status, last seen, and skills
-- [ ] **DASH-02**: User can view task board with status, assignee, requester, and filtering
+- [x] **DASH-01**: User can view agent directory with cards, status, last seen, and skills
+- [x] **DASH-02**: User can view task board with status, assignee, requester, and filtering
 - [x] **DASH-03**: User can view conversation message history
 - [x] **DASH-04**: User can view activity feed of recent events across all conversations
 - [x] **DASH-05**: Dashboard pages update via htmx partials without full page reload
@@ -25,7 +25,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 ### Human Operator
 
 - [x] **HUMAN-01**: A virtual "human" agent exists with an `is_human` flag on the Agent model
-- [ ] **HUMAN-02**: Human operator is distinguishable from regular agents in both UI and API responses
+- [x] **HUMAN-02**: Human operator is distinguishable from regular agents in both UI and API responses
 - [ ] **HUMAN-03**: Messages sent from dashboard are attributed to the human operator agent
 
 ### Real-Time Push (SSE)
@@ -75,13 +75,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DASH-01 | Phase 1 | Pending |
-| DASH-02 | Phase 1 | Pending |
+| DASH-01 | Phase 1 | Complete |
+| DASH-02 | Phase 1 | Complete |
 | DASH-03 | Phase 1 | Complete |
 | DASH-04 | Phase 1 | Complete |
 | DASH-05 | Phase 1 | Complete |
 | HUMAN-01 | Phase 1 | Complete |
-| HUMAN-02 | Phase 1 | Pending |
+| HUMAN-02 | Phase 1 | Complete |
 | INTX-01 | Phase 2 | Pending |
 | INTX-02 | Phase 2 | Pending |
 | INTX-03 | Phase 2 | Pending |
