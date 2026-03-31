@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS agents (
     dnd_reason  TEXT,
     connected_at TEXT,
     last_seen   TEXT,
-    oauth_subject TEXT
+    oauth_subject TEXT,
+    is_human    INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS agent_cards (
@@ -134,6 +135,13 @@ class Store:
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
+        try:
+            self._conn.execute(
+                "ALTER TABLE agents ADD COLUMN is_human INTEGER NOT NULL DEFAULT 0"
+            )
+            self._conn.commit()
+        except Exception:
+            pass  # Column already exists
 
     def close(self) -> None:
         self._conn.close()
@@ -144,14 +152,14 @@ class Store:
 
     def upsert_agent(self, agent: Agent) -> None:
         self._conn.execute(
-            """INSERT INTO agents (id, name, status, dnd_reason, connected_at, last_seen, oauth_subject)
-               VALUES (?, ?, ?, ?, ?, ?, ?)
+            """INSERT INTO agents (id, name, status, dnd_reason, connected_at, last_seen, oauth_subject, is_human)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                  name=excluded.name, status=excluded.status, dnd_reason=excluded.dnd_reason,
                  connected_at=excluded.connected_at, last_seen=excluded.last_seen,
-                 oauth_subject=excluded.oauth_subject""",
+                 oauth_subject=excluded.oauth_subject, is_human=excluded.is_human""",
             (agent.id, agent.name, agent.status, agent.dnd_reason,
-             agent.connected_at, agent.last_seen, agent.oauth_subject),
+             agent.connected_at, agent.last_seen, agent.oauth_subject, int(agent.is_human)),
         )
         self._conn.commit()
 
@@ -179,6 +187,7 @@ class Store:
             connected_at=row["connected_at"],
             last_seen=row["last_seen"],
             oauth_subject=row["oauth_subject"],
+            is_human=bool(row["is_human"]),
         )
 
     # ------------------------------------------------------------------

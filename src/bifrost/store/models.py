@@ -126,6 +126,7 @@ class Agent:
     last_seen: str | None = None
     oauth_subject: str | None = None
     card: AgentCard | None = None
+    is_human: bool = False
 
 
 @dataclass
