@@ -1,20 +1,20 @@
 {% extends "base.html" %}
 {% block title %}Tasks{% endblock %}
 {% block content %}
-<h1>Task Board</h1>
-<div role="group">
-  <button hx-get="/tasks/list" hx-target="#task-list" hx-swap="innerHTML">All</button>
-  <button hx-get="/tasks/list?status=queued" hx-target="#task-list" hx-swap="innerHTML">Queued</button>
-  <button hx-get="/tasks/list?status=running" hx-target="#task-list" hx-swap="innerHTML">Running</button>
-  <button hx-get="/tasks/list?status=completed" hx-target="#task-list" hx-swap="innerHTML">Completed</button>
-  <button hx-get="/tasks/list?status=failed" hx-target="#task-list" hx-swap="innerHTML">Failed</button>
-  <button hx-get="/tasks/list?status=canceled" hx-target="#task-list" hx-swap="innerHTML">Canceled</button>
-  <button hx-get="/tasks/list?status=rejected" hx-target="#task-list" hx-swap="innerHTML">Rejected</button>
+<h1 class="text-2xl font-bold mb-4">Task Board</h1>
+<div class="flex gap-2 mb-4">
+  <button class="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 text-sm" hx-get="/tasks/list" hx-target="#task-list" hx-swap="innerHTML">All</button>
+  <button class="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 text-sm" hx-get="/tasks/list?status=queued" hx-target="#task-list" hx-swap="innerHTML">Queued</button>
+  <button class="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 text-sm" hx-get="/tasks/list?status=running" hx-target="#task-list" hx-swap="innerHTML">Running</button>
+  <button class="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 text-sm" hx-get="/tasks/list?status=completed" hx-target="#task-list" hx-swap="innerHTML">Completed</button>
+  <button class="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 text-sm" hx-get="/tasks/list?status=failed" hx-target="#task-list" hx-swap="innerHTML">Failed</button>
+  <button class="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 text-sm" hx-get="/tasks/list?status=canceled" hx-target="#task-list" hx-swap="innerHTML">Canceled</button>
+  <button class="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 text-sm" hx-get="/tasks/list?status=rejected" hx-target="#task-list" hx-swap="innerHTML">Rejected</button>
 </div>
 <div id="task-list"
      hx-get="/tasks/list"
      hx-trigger="load, every 10s"
      hx-swap="innerHTML">
-  Loading...
+  <p class="text-gray-500">Loading...</p>
 </div>
 {% endblock %}

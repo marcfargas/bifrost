@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% block title %}Agents{% endblock %}
 {% block content %}
-<h1>Agent Directory</h1>
+<h1 class="text-2xl font-bold mb-4">Agent Directory</h1>
 <div id="agent-list"
      hx-get="/agents/list"
      hx-trigger="load, every 10s"
      hx-swap="innerHTML">
-  Loading...
+  <p class="text-gray-500">Loading...</p>
 </div>
 {% endblock %}

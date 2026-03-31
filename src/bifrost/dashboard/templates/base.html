@@ -4,52 +4,39 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Bifrost — {% block title %}Dashboard{% endblock %}</title>
-  <link rel="stylesheet"
-        href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.classless.min.css">
+  <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.8/dist/htmx.min.js"
           integrity="sha384-/TgkGk7p307TH7EXJDuUlgG3Ce1UVolAOFopFekQkkXihi5u/6OCvVKyz1W+idaz"
           crossorigin="anonymous"></script>
-  <style>
-    .dashboard-grid { display: grid; grid-template-columns: 200px 1fr; min-height: 100vh; }
-    .dashboard-grid > nav { padding: 1rem; }
-    .dashboard-grid > nav h2 { margin-bottom: 1rem; }
-    .agent-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; }
-    .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
-    .status-dot.online { background: var(--pico-primary); }
-    .status-dot.idle { background: #f57f17; }
-    .status-dot.offline { background: var(--pico-muted-color); }
-    .status-dot.dnd { background: #c62828; }
-    .human-card { border-left: 3px solid var(--pico-primary); padding-left: 1rem; }
-    .conv-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 1rem; }
-    .conv-item { cursor: pointer; }
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 14px; }
-    .badge-queued { background: #e3f2fd; color: #0d47a1; }
-    .badge-running { background: #fff8e1; color: #f57f17; }
-    .badge-completed { background: #e8f5e9; color: #2e7d32; }
-    .badge-failed { background: #fce4ec; color: #c62828; }
-    .badge-canceled, .badge-rejected { color: var(--pico-muted-color); }
-    @media (prefers-color-scheme: dark) {
-      .badge-queued { background: #1a3a5c; color: #90caf9; }
-      .badge-running { background: #4a3800; color: #ffcc02; }
-      .badge-completed { background: #1a3a1a; color: #81c784; }
-      .badge-failed { background: #4a0014; color: #ef9a9a; }
-    }
-  </style>
 </head>
-<body>
-  <div class="dashboard-grid">
-    <nav>
-      <h2>Bifrost</h2>
-      <ul>
-        <li><a href="/agents" {% if active == 'agents' %}aria-current="page"{% endif %}>Agents</a></li>
-        <li><a href="/tasks" {% if active == 'tasks' %}aria-current="page"{% endif %}>Tasks</a></li>
-        <li><a href="/conversations" {% if active == 'conversations' %}aria-current="page"{% endif %}>Conversations</a></li>
-        <li><a href="/activity" {% if active == 'activity' %}aria-current="page"{% endif %}>Activity</a></li>
-      </ul>
-    </nav>
-    <main class="container">
-      {% block content %}{% endblock %}
-    </main>
-  </div>
+<body class="bg-gray-50">
+  <nav class="fixed top-0 left-0 w-56 h-full bg-gray-900 text-white p-6 overflow-y-auto">
+    <h2 class="text-xl font-bold mb-6">Bifrost</h2>
+    <ul class="space-y-1">
+      <li>
+        <a href="/agents"
+           class="block px-3 py-2 rounded text-sm {% if active == 'agents' %}bg-gray-700{% endif %} hover:bg-gray-700 transition-colors"
+           {% if active == 'agents' %}aria-current="page"{% endif %}>Agents</a>
+      </li>
+      <li>
+        <a href="/tasks"
+           class="block px-3 py-2 rounded text-sm {% if active == 'tasks' %}bg-gray-700{% endif %} hover:bg-gray-700 transition-colors"
+           {% if active == 'tasks' %}aria-current="page"{% endif %}>Tasks</a>
+      </li>
+      <li>
+        <a href="/conversations"
+           class="block px-3 py-2 rounded text-sm {% if active == 'conversations' %}bg-gray-700{% endif %} hover:bg-gray-700 transition-colors"
+           {% if active == 'conversations' %}aria-current="page"{% endif %}>Conversations</a>
+      </li>
+      <li>
+        <a href="/activity"
+           class="block px-3 py-2 rounded text-sm {% if active == 'activity' %}bg-gray-700{% endif %} hover:bg-gray-700 transition-colors"
+           {% if active == 'activity' %}aria-current="page"{% endif %}>Activity</a>
+      </li>
+    </ul>
+  </nav>
+  <main class="ml-56 min-h-screen p-6">
+    {% block content %}{% endblock %}
+  </main>
 </body>
 </html>

@@ -1,16 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Conversations{% endblock %}
 {% block content %}
-<h1>Conversations</h1>
-<div class="conv-grid">
-  <div id="conv-list"
+<h1 class="text-2xl font-bold mb-4">Conversations</h1>
+<div class="grid grid-cols-3 gap-4">
+  <div id="conv-list" class="col-span-1"
        hx-get="/conversations/list"
        hx-trigger="load, every 10s"
        hx-swap="innerHTML">
-    Loading...
+    <p class="text-gray-500">Loading...</p>
   </div>
-  <div id="conv-detail">
-    <p>Select a conversation to view messages.</p>
+  <div id="conv-detail" class="col-span-2">
+    <p class="text-gray-500">Select a conversation to view messages.</p>
   </div>
 </div>
 {% endblock %}
