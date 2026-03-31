@@ -87,3 +87,41 @@ class TestDashboardRoutes:
         assert 'hx-get="/tasks/list?status=running"' in resp.text
         assert 'hx-get="/tasks/list?status=completed"' in resp.text
         assert 'hx-get="/tasks/list?status=failed"' in resp.text
+
+    def test_conversation_detail_404(self, client):
+        """Non-existent conversation returns 404."""
+        resp = client.get("/conversations/nonexistent/messages")
+        assert resp.status_code == 404
+        assert "not found" in resp.text.lower()
+
+    def test_conversation_list_empty(self, client):
+        """Conversation list shows empty state."""
+        resp = client.get("/conversations/list")
+        assert resp.status_code == 200
+        assert "No conversations." in resp.text
+
+    def test_activity_feed_empty(self, client):
+        """Activity feed shows empty state."""
+        resp = client.get("/activity/feed")
+        assert resp.status_code == 200
+        assert "No activity yet." in resp.text
+
+    def test_activity_polling_interval(self, client):
+        """Activity page polls every 5s (not 10s)."""
+        resp = client.get("/activity")
+        assert 'hx-trigger="load, every 5s"' in resp.text
+
+    def test_conversations_polling_interval(self, client):
+        """Conversation list polls every 10s."""
+        resp = client.get("/conversations")
+        assert 'hx-trigger="load, every 10s"' in resp.text
+
+    def test_all_pages_have_sidebar(self, client):
+        """All pages include sidebar navigation."""
+        for url in ["/agents", "/tasks", "/conversations", "/activity"]:
+            resp = client.get(url)
+            assert "Bifrost" in resp.text, f"Missing sidebar heading on {url}"
+            assert 'href="/agents"' in resp.text, f"Missing agents link on {url}"
+            assert 'href="/tasks"' in resp.text, f"Missing tasks link on {url}"
+            assert 'href="/conversations"' in resp.text, f"Missing conversations link on {url}"
+            assert 'href="/activity"' in resp.text, f"Missing activity link on {url}"

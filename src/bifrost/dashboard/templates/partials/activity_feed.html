@@ -1,13 +1,14 @@
 {% if events %}
-<ul>
-  {% for e in events %}
-  <li>
-    <strong>{{ agent_names.get(e.from_agent, e.from_agent[:8]) }}</strong>
-    <small>{{ e.timestamp|fmt_time }}</small>
-    <span>{{ e.type }}: {{ e.data|fmt_event(e.type) }}</span>
-  </li>
-  {% endfor %}
-</ul>
+{% for event in events %}
+<article>
+  <header>
+    <small>{{ event.timestamp | fmt_time }}</small>
+    <span class="badge">{{ event.type }}</span>
+    <strong>{{ agent_names.get(event.from_agent, event.from_agent[:8]) }}</strong>
+  </header>
+  <p>{{ event.data | fmt_event(event.type) }}</p>
+</article>
+{% endfor %}
 {% else %}
-<p>No recent activity.</p>
+<p>No activity yet.</p>
 {% endif %}
