@@ -11,8 +11,8 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 - [ ] **DASH-01**: User can view agent directory with cards, status, last seen, and skills
 - [ ] **DASH-02**: User can view task board with status, assignee, requester, and filtering
-- [ ] **DASH-03**: User can view conversation message history
-- [ ] **DASH-04**: User can view activity feed of recent events across all conversations
+- [x] **DASH-03**: User can view conversation message history
+- [x] **DASH-04**: User can view activity feed of recent events across all conversations
 - [x] **DASH-05**: Dashboard pages update via htmx partials without full page reload
 
 ### Dashboard Interactivity
@@ -77,8 +77,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 |-------------|-------|--------|
 | DASH-01 | Phase 1 | Pending |
 | DASH-02 | Phase 1 | Pending |
-| DASH-03 | Phase 1 | Pending |
-| DASH-04 | Phase 1 | Pending |
+| DASH-03 | Phase 1 | Complete |
+| DASH-04 | Phase 1 | Complete |
 | DASH-05 | Phase 1 | Complete |
 | HUMAN-01 | Phase 1 | Complete |
 | HUMAN-02 | Phase 1 | Pending |

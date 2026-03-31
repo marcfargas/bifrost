@@ -33,7 +33,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 Plans:
 - [x] 01-01-PLAN.md — Model + schema migration, dashboard route infrastructure, base template
 - [x] 01-02-PLAN.md — Agent directory (card grid) and task board (filtered list with badges)
-- [ ] 01-03-PLAN.md — Conversation viewer (two-panel) and activity feed
+- [x] 01-03-PLAN.md — Conversation viewer (two-panel) and activity feed
 **UI hint**: yes
 
 ### Phase 2: Human Operator + Interactive Actions
