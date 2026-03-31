@@ -62,3 +62,28 @@ class TestDashboardRoutes:
         resp = client.get("/agents/list")
         assert resp.status_code == 200
         assert "Human Operator" in resp.text
+
+    def test_agents_list_with_data(self, client):
+        """Test agent list shows human operator card with status and badge."""
+        # Trigger human operator creation
+        resp = client.get("/agents")
+        resp = client.get("/agents/list")
+        assert resp.status_code == 200
+        assert "Human Operator" in resp.text
+        assert "human-card" in resp.text
+        assert "status-dot" in resp.text
+
+    def test_tasks_list_with_filter(self, client):
+        """Test task list filter parameter returns empty state."""
+        resp = client.get("/tasks/list?status=queued")
+        assert resp.status_code == 200
+        assert "No tasks found." in resp.text
+
+    def test_tasks_filter_buttons_present(self, client):
+        """Test task page has filter buttons."""
+        resp = client.get("/tasks")
+        assert resp.status_code == 200
+        assert 'hx-get="/tasks/list?status=queued"' in resp.text
+        assert 'hx-get="/tasks/list?status=running"' in resp.text
+        assert 'hx-get="/tasks/list?status=completed"' in resp.text
+        assert 'hx-get="/tasks/list?status=failed"' in resp.text

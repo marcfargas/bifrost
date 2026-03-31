@@ -1,20 +1,26 @@
 {% if tasks %}
 <table>
   <thead>
-    <tr><th>ID</th><th>Status</th><th>Requester</th><th>Assignee</th><th>Updated</th></tr>
+    <tr>
+      <th>Task ID</th>
+      <th>Status</th>
+      <th>Assignee</th>
+      <th>Requester</th>
+      <th>Created</th>
+    </tr>
   </thead>
   <tbody>
-    {% for t in tasks %}
+    {% for task in tasks %}
     <tr>
-      <td>{{ t.id[:8] }}</td>
-      <td><span class="badge badge-{{ t.status }}">{{ t.status }}</span></td>
-      <td>{{ agent_names.get(t.requester, t.requester[:8]) }}</td>
-      <td>{{ agent_names.get(t.assignee, t.assignee[:8]) }}</td>
-      <td>{{ t.updated_at|fmt_time }}</td>
+      <td><code>{{ task.id }}</code></td>
+      <td><span class="badge badge-{{ task.status }}">{{ task.status | capitalize }}</span></td>
+      <td>{{ agent_names.get(task.assignee, task.assignee[:8]) }}</td>
+      <td>{{ agent_names.get(task.requester, task.requester[:8]) }}</td>
+      <td><small>{{ task.created_at | fmt_time }}</small></td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
 {% else %}
-<p>No tasks.</p>
+<p>No tasks found.</p>
 {% endif %}
