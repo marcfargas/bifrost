@@ -29,11 +29,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. User can view a conversation and read its message history
   4. User can view activity feed showing recent events across all conversations
   5. All dashboard views refresh their data via htmx partials without a full page reload
-**Plans:** 3 plans
+**Plans:** 4 plans
 Plans:
 - [x] 01-01-PLAN.md — Model + schema migration, dashboard route infrastructure, base template
 - [x] 01-02-PLAN.md — Agent directory (card grid) and task board (filtered list with badges)
 - [x] 01-03-PLAN.md — Conversation viewer (two-panel) and activity feed
+- [ ] 01-04-PLAN.md — Gap closure: is_human indicator in MCP tool responses (HUMAN-02)
 **UI hint**: yes
 
 ### Phase 2: Human Operator + Interactive Actions
@@ -76,7 +77,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation + Read-Only Dashboard | 0/3 | Planning complete | - |
+| 1. Foundation + Read-Only Dashboard | 3/4 | Gap closure planned | - |
 | 2. Human Operator + Interactive Actions | 0/? | Not started | - |
 | 3. Real-Time Push (SSE) | 0/? | Not started | - |
 | 4. Dashboard Auth | 0/? | Not started | - |
