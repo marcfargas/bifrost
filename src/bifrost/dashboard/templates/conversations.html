@@ -3,13 +3,13 @@
 {% block content %}
 <h1>Conversations</h1>
 <div class="conv-grid">
-  <div id="conversation-list"
+  <div id="conv-list"
        hx-get="/conversations/list"
        hx-trigger="load, every 10s"
        hx-swap="innerHTML">
     Loading...
   </div>
-  <div id="conversation-detail">
+  <div id="conv-detail">
     <p>Select a conversation to view messages.</p>
   </div>
 </div>

@@ -1,18 +1,28 @@
-{% if conversation %}
-<h3>{{ conversation.title or conversation.id[:8] }}</h3>
+<h3>{{ conversation.title or conversation.id[:12] }}</h3>
+{% if conversation.channel %}<small>Channel: {{ conversation.channel }}</small>{% endif %}
+<hr>
 {% if events %}
-<ul>
-  {% for e in events %}
-  <li>
-    <strong>{{ agent_names.get(e.from_agent, e.from_agent[:8]) }}</strong>
-    <small>{{ e.timestamp|fmt_time }}</small>
-    <p>{{ e.data|fmt_event(e.type) }}</p>
-  </li>
-  {% endfor %}
-</ul>
+{% for event in events %}
+<article>
+  <header>
+    <strong>{{ agent_names.get(event.from_agent, event.from_agent[:8]) }}</strong>
+    <small>{{ event.timestamp | fmt_time }}</small>
+  </header>
+  {% if event.type == "message" %}
+    {% for part in event.data.get("parts", []) %}
+      {% if part.type == "text" %}
+      <p>{{ part.text }}</p>
+      {% elif part.type == "file" %}
+      <p><em>[File: {{ part.get("mime_type", "unknown") }}]</em></p>
+      {% elif part.type == "data" %}
+      <p><code>{{ part.data | tojson }}</code></p>
+      {% endif %}
+    {% endfor %}
+  {% else %}
+  <p><em>{{ event.type }}: {{ event.data | fmt_event(event.type) }}</em></p>
+  {% endif %}
+</article>
+{% endfor %}
 {% else %}
-<p>No messages yet.</p>
-{% endif %}
-{% else %}
-<p>Select a conversation to view messages.</p>
+<p>No messages in this conversation.</p>
 {% endif %}
