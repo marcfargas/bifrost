@@ -71,8 +71,10 @@ Pico CSS applies typography to semantic HTML elements. Do not add font classes. 
 |------|---------|------|--------|-------------|
 | Body | `<p>`, `<td>`, `<li>` | 16px | 400 (regular) | 1.5 |
 | Label / Meta | `<small>`, `<figcaption>` | 14px | 400 (regular) | 1.4 |
-| Heading | `<h2>`, `<h3>` | 20px / 18px | 600 (semibold) | 1.2 |
+| Heading | `<h2>`, `<h3>` | 20px | 600 (semibold) | 1.2 |
 | Display | `<h1>` (page title) | 28px | 600 (semibold) | 1.2 |
+
+**4-size scale:** 14 (label/meta), 16 (body), 20 (heading), 28 (display). Both `<h2>` and `<h3>` render at 20px — no sub-heading distinction in this phase.
 
 **Weights used: 2** — regular (400) for body/meta, semibold (600) for headings.
 
@@ -113,6 +115,8 @@ The values below define the **semantic roles** and which **Pico CSS variables** 
 **Implementation note:** Status badges use `<span>` with `style="..."` inline per badge, or a minimal `<style>` block in `base.html`. Do not introduce a separate CSS file in Phase 1.
 
 **Human operator distinction** (HUMAN-02): The human operator `<article>` card at the top of the agent directory uses a left border accent: `style="border-left: 3px solid var(--pico-primary); padding-left: 1rem;"`. Regular agent cards have no border decoration.
+
+**Focal point — agents page:** The human operator `<article>` card with left-border accent is the primary visual anchor on the agents page. It sits above the regular agent grid, rendered at full width, and is the first element a user's eye reaches on the landing screen.
 
 **Source:** D-02 (Pico CSS), D-03 (auto dark/light), D-09 (human operator visual separation), RESEARCH.md Pattern 4.
 
