@@ -10,6 +10,7 @@ from bifrost.hub.delivery import DeliveryHub
 from bifrost.hub.tasks import TaskHub, InvalidTransition
 from bifrost.mcp.tools import ToolHandlers
 from bifrost.store.db import Store
+from bifrost.store.models import Agent, AgentStatus
 
 
 @pytest.fixture()
@@ -42,6 +43,18 @@ def alice(hubs):
 @pytest.fixture()
 def bob(hubs):
     return hubs["agents"].register("bob")
+
+
+@pytest.fixture()
+def human_operator(store):
+    """Create a human operator agent (is_human=True)."""
+    agent = Agent(
+        name="Human Operator",
+        status=AgentStatus.ONLINE,
+        is_human=True,
+    )
+    store.upsert_agent(agent)
+    return agent
 
 
 # ------------------------------------------------------------------
@@ -88,6 +101,14 @@ class TestHandleWhoami:
         assert "dnd" in result
         assert "busy coding" in result
 
+    def test_human_indicator(self, handlers, human_operator):
+        result = handlers.handle_whoami(human_operator.id)
+        assert "Human: yes" in result
+
+    def test_regular_agent_no_human_indicator(self, handlers, alice):
+        result = handlers.handle_whoami(alice.id)
+        assert "Human:" not in result
+
 
 # ------------------------------------------------------------------
 # 3. handle_list_agents
@@ -109,6 +130,24 @@ class TestHandleListAgents:
         result = handlers.handle_list_agents(status="online")
         assert "alice" in result
         assert "bob" not in result
+
+    def test_human_agent_tagged(self, handlers, alice, human_operator):
+        result = handlers.handle_list_agents()
+        # Human operator line should have [human] tag
+        for line in result.splitlines():
+            if "Human Operator" in line:
+                assert "[human]" in line
+                break
+        else:
+            pytest.fail("Human Operator not found in list output")
+
+    def test_regular_agent_no_human_tag(self, handlers, alice, bob):
+        result = handlers.handle_list_agents()
+        for line in result.splitlines():
+            if "alice" in line:
+                assert "[human]" not in line
+            if "bob" in line:
+                assert "[human]" not in line
 
 
 # ------------------------------------------------------------------
