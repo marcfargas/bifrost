@@ -24,7 +24,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Depends on**: Nothing (first phase)
 **Requirements**: DASH-01, DASH-02, DASH-03, DASH-04, DASH-05, HUMAN-01, HUMAN-02
 **Success Criteria** (what must be TRUE):
-  1. User can navigate to /dashboard and see agent directory with name, status, last seen, and skills
+  1. User can navigate to /agents and see agent directory with name, status, last seen, and skills
   2. User can view task board showing all tasks with status, assignee, requester, and filter by status
   3. User can view a conversation and read its message history
   4. User can view activity feed showing recent events across all conversations
