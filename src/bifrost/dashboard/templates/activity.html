@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Activity{% endblock %}
+{% block content %}
+<h1>Activity Feed</h1>
+<div id="activity-feed"
+     hx-get="/activity/feed"
+     hx-trigger="load, every 10s"
+     hx-swap="innerHTML">
+  Loading...
+</div>
+{% endblock %}

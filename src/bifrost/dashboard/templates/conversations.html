@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Conversations{% endblock %}
+{% block content %}
+<h1>Conversations</h1>
+<div class="conv-grid">
+  <div id="conversation-list"
+       hx-get="/conversations/list"
+       hx-trigger="load, every 10s"
+       hx-swap="innerHTML">
+    Loading...
+  </div>
+  <div id="conversation-detail">
+    <p>Select a conversation to view messages.</p>
+  </div>
+</div>
+{% endblock %}

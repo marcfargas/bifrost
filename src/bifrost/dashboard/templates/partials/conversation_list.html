@@ -1,0 +1,15 @@
+{% if conversations %}
+<ul>
+  {% for c in conversations %}
+  <li class="conv-item"
+      hx-get="/conversations/{{ c.id }}/messages"
+      hx-target="#conversation-detail"
+      hx-swap="innerHTML">
+    <strong>{{ c.title or c.id[:8] }}</strong>
+    {% if c.channel %}<small>({{ c.channel }})</small>{% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p>No conversations.</p>
+{% endif %}

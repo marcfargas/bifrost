@@ -107,6 +107,13 @@ def create_app(config: Config) -> FastMCP:
     mcp = FastMCP(**mcp_kwargs)
 
     # ------------------------------------------------------------------
+    # Dashboard routes
+    # ------------------------------------------------------------------
+
+    from bifrost.dashboard.routes import setup_dashboard_routes
+    setup_dashboard_routes(mcp, store)
+
+    # ------------------------------------------------------------------
     # Auto-register unnamed agents on any authenticated MCP request.
     # The list_tools handler runs on every new connection — we hook into
     # it to ensure authenticated sessions get a placeholder agent entry.

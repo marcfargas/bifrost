@@ -1,0 +1,18 @@
+{% if conversation %}
+<h3>{{ conversation.title or conversation.id[:8] }}</h3>
+{% if events %}
+<ul>
+  {% for e in events %}
+  <li>
+    <strong>{{ agent_names.get(e.from_agent, e.from_agent[:8]) }}</strong>
+    <small>{{ e.timestamp|fmt_time }}</small>
+    <p>{{ e.data|fmt_event(e.type) }}</p>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p>No messages yet.</p>
+{% endif %}
+{% else %}
+<p>Select a conversation to view messages.</p>
+{% endif %}

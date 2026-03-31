@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Tasks{% endblock %}
+{% block content %}
+<h1>Task Board</h1>
+<div id="task-list"
+     hx-get="/tasks/list"
+     hx-trigger="load, every 10s"
+     hx-swap="innerHTML">
+  Loading...
+</div>
+{% endblock %}

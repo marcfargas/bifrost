@@ -1,0 +1,21 @@
+{% if human %}
+<div class="human-card">
+  <strong>{{ human.name }}</strong>
+  <span class="status-dot {{ human.status }}"></span>{{ human.status }}
+</div>
+{% endif %}
+{% if agents %}
+<div class="agent-card-grid">
+  {% for agent in agents %}
+  <article>
+    <header>
+      <span class="status-dot {{ agent.status }}"></span>
+      <strong>{{ agent.name }}</strong>
+    </header>
+    <p>Status: {{ agent.status }} | Last seen: {{ agent.last_seen|fmt_time }}</p>
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<p>No agents connected.</p>
+{% endif %}
