@@ -75,31 +75,31 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DASH-01 | — | Pending |
-| DASH-02 | — | Pending |
-| DASH-03 | — | Pending |
-| DASH-04 | — | Pending |
-| DASH-05 | — | Pending |
-| INTX-01 | — | Pending |
-| INTX-02 | — | Pending |
-| INTX-03 | — | Pending |
-| INTX-04 | — | Pending |
-| HUMAN-01 | — | Pending |
-| HUMAN-02 | — | Pending |
-| HUMAN-03 | — | Pending |
-| SSE-01 | — | Pending |
-| SSE-02 | — | Pending |
-| SSE-03 | — | Pending |
-| SSE-04 | — | Pending |
-| AUTH-01 | — | Pending |
-| AUTH-02 | — | Pending |
-| AUTH-03 | — | Pending |
+| DASH-01 | Phase 1 | Pending |
+| DASH-02 | Phase 1 | Pending |
+| DASH-03 | Phase 1 | Pending |
+| DASH-04 | Phase 1 | Pending |
+| DASH-05 | Phase 1 | Pending |
+| HUMAN-01 | Phase 1 | Pending |
+| HUMAN-02 | Phase 1 | Pending |
+| INTX-01 | Phase 2 | Pending |
+| INTX-02 | Phase 2 | Pending |
+| INTX-03 | Phase 2 | Pending |
+| INTX-04 | Phase 2 | Pending |
+| HUMAN-03 | Phase 2 | Pending |
+| SSE-01 | Phase 3 | Pending |
+| SSE-02 | Phase 3 | Pending |
+| SSE-03 | Phase 3 | Pending |
+| SSE-04 | Phase 3 | Pending |
+| AUTH-01 | Phase 4 | Pending |
+| AUTH-02 | Phase 4 | Pending |
+| AUTH-03 | Phase 4 | Pending |
 
 **Coverage:**
 - v1 requirements: 19 total
-- Mapped to phases: 0
-- Unmapped: 19
+- Mapped to phases: 19
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-31*
-*Last updated: 2026-03-31 after initial definition*
+*Last updated: 2026-03-30 after roadmap creation — all 19 requirements mapped*
