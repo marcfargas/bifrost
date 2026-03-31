@@ -1,21 +1,45 @@
 {% if human %}
-<div class="human-card">
-  <strong>{{ human.name }}</strong>
-  <span class="status-dot {{ human.status }}"></span>{{ human.status }}
-</div>
-{% endif %}
-{% if agents %}
-<div class="agent-card-grid">
-  {% for agent in agents %}
-  <article>
-    <header>
-      <span class="status-dot {{ agent.status }}"></span>
-      <strong>{{ agent.name }}</strong>
-    </header>
-    <p>Status: {{ agent.status }} | Last seen: {{ agent.last_seen|fmt_time }}</p>
+<section>
+  <h2>Human Operator</h2>
+  <article class="human-card">
+    <strong>{{ human.name }}</strong>
+    <span class="badge">Human</span>
+    <br>
+    <span class="status-dot {{ human.status }}"></span>
+    {{ human.status | capitalize }}
+    <br>
+    <small>Last seen: {{ human.last_seen | fmt_time }}</small>
+    {% if human.card and human.card.skills %}
+    <br><small>Skills: {{ human.card.skills | map(attribute='name') | join(', ') }}</small>
+    {% endif %}
   </article>
-  {% endfor %}
-</div>
-{% else %}
-<p>No agents connected.</p>
+</section>
 {% endif %}
+
+<section>
+  <h2>Agents</h2>
+  {% if agents %}
+  <div class="agent-card-grid">
+    {% for agent in agents %}
+    <article>
+      <strong>{{ agent.name }}</strong>
+      <br>
+      <span class="status-dot {{ agent.status }}"></span>
+      {{ agent.status | capitalize }}
+      <br>
+      <small>Last seen: {{ agent.last_seen | fmt_time }}</small>
+      {% if agent.card %}
+        {% if agent.card.description %}
+        <br><small>{{ agent.card.description }}</small>
+        {% endif %}
+        {% if agent.card.skills %}
+        <br><small>Skills: {{ agent.card.skills | map(attribute='name') | join(', ') }}</small>
+        {% endif %}
+      {% endif %}
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p>No agents connected.</p>
+  {% endif %}
+</section>
