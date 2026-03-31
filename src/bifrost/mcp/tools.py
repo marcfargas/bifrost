@@ -102,6 +102,8 @@ class ToolHandlers:
             f"ID: {agent.id}",
             f"Status: {agent.status}",
         ]
+        if agent.is_human:
+            lines.append("Human: yes")
         if agent.dnd_reason:
             lines.append(f"DND reason: {agent.dnd_reason}")
         if agent.card and agent.card.description:
@@ -125,7 +127,8 @@ class ToolHandlers:
             desc = ""
             if a.card and a.card.description:
                 desc = f" — {a.card.description}"
-            lines.append(f"- {a.name} [{a.status}]{desc}")
+            tag = " [human]" if a.is_human else ""
+            lines.append(f"- {a.name} [{a.status}]{tag}{desc}")
         return "\n".join(lines)
 
     # ------------------------------------------------------------------
