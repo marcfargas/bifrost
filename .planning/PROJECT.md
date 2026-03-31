@@ -26,8 +26,8 @@ Agents can find each other and exchange messages and tasks through a single shar
 
 ### Active
 
-- [ ] Interactive web dashboard (Jinja2 + htmx) with agent directory, task board, conversation viewer, activity feed
-- [ ] Dashboard human operator: virtual "human" agent with flag distinguishing it from regular agents
+- ✓ Interactive web dashboard (Jinja2 + htmx) with agent directory, task board, conversation viewer, activity feed — Validated in Phase 1: Foundation + Read-Only Dashboard
+- ✓ Dashboard human operator: virtual "human" agent with flag distinguishing it from regular agents — Validated in Phase 1: Foundation + Read-Only Dashboard
 - [ ] Dashboard actions: send messages, create/update/cancel tasks from the UI
 - [ ] Dashboard OAuth: same OIDC auth protecting dashboard routes
 - [ ] Channel push via SSE: real-time message delivery to agents without polling
