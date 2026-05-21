@@ -1,5 +1,5 @@
 {
-  "model_profile": "balanced",
+  "model_profile": "hybrid",
   "commit_docs": true,
   "parallelization": true,
   "search_gitignored": false,
@@ -7,7 +7,7 @@
   "firecrawl": false,
   "exa_search": false,
   "git": {
-    "branching_strategy": "none",
+    "branching_strategy": "phase",
     "phase_branch_template": "gsd/phase-{phase}-{slug}",
     "milestone_branch_template": "gsd/{milestone}-{slug}",
     "quick_branch_template": null
@@ -26,12 +26,14 @@
     "research_before_questions": false,
     "discuss_mode": "discuss",
     "skip_discuss": false,
-    "_auto_chain_active": false
+    "_auto_chain_active": false,
+    "use_worktrees": false
   },
   "hooks": {
     "context_warnings": true
   },
   "agent_skills": {},
   "mode": "yolo",
-  "granularity": "coarse"
+  "granularity": "coarse",
+  "branching_strategy": "phase"
 }
